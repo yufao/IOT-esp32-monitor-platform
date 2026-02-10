@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Smart Lab Sentinel</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="bg-orbit"></div>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-dot"></div>
+          <div>
+            <h1>Smart Lab Sentinel</h1>
+            <p>BLE dashboard for ESP32</p>
+          </div>
+        </div>
+        <div class="status">
+          <span id="wsStatus" class="pill warn">Disconnected</span>
+          <span id="bleStatus" class="pill">BLE: idle</span>
+        </div>
+      </header>
+
+      <section class="grid">
+        <div class="card">
+          <h3>Temperature</h3>
+          <div class="metric">
+            <span id="temp">--</span>
+            <small>degC</small>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Pressure</h3>
+          <div class="metric">
+            <span id="pressure">--</span>
+            <small>hPa</small>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Light</h3>
+          <div class="metric">
+            <span id="light">--</span>
+            <small>%</small>
+          </div>
+        </div>
+        <div class="card wide">
+          <h3>Live Stream</h3>
+          <pre id="raw" class="raw">waiting...</pre>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-col">
+          <h3>BLE Connect</h3>
+          <div class="row">
+            <input id="deviceName" placeholder="Device name (default SLS_ESP32)" />
+            <button id="btnScan">Scan</button>
+            <button id="btnConnect">Connect</button>
+          </div>
+          <div id="scanList" class="list"></div>
+        </div>
+
+        <div class="panel-col">
+          <h3>WiFi Provision</h3>
+          <div class="row">
+            <input id="ssid" placeholder="SSID" />
+            <input id="password" placeholder="Password" type="password" />
+            <button id="btnWifi">Send</button>
+          </div>
+        </div>
+
+        <div class="panel-col">
+          <h3>Threshold</h3>
+          <div class="row">
+            <input id="tempHigh" placeholder="Temp high" />
+            <input id="tempLow" placeholder="Temp low" />
+            <button id="btnThresh">Apply</button>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span>Local log: auto save CSV in desktop/python/logs</span>
+      </footer>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

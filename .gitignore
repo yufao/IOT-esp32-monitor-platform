@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.venv/
+.venv*/
+venv/
+ENV/
+
+# env,pin
+hardware/hw_config.py
+
+# Node/Electron
+node_modules/
+.npm/
+.npm-cache/
+dist/
+out/
+*.log
+
+# Build artifacts
+build/
+*.exe
+*.dmg
+*.pkg
+*.msi
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# Logs and runtime data
+logs/
+*.csv
+
+# MicroPython
+*.mpy

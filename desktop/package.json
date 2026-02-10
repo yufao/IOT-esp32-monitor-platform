@@ -1,0 +1,13 @@
+{
+  "name": "smart-lab-sentinel-desktop",
+  "version": "0.1.0",
+  "main": "main.js",
+  "private": true,
+  "description": "Smart Lab Sentinel desktop app (Electron + BLE bridge)",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^30.0.0"
+  }
+}
