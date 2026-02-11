@@ -29,7 +29,7 @@ def load_config():
         return DEFAULTS.copy()
 
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(CONFIG_PATH, "r") as f:
             data = json.load(f)
     except Exception:
         return DEFAULTS.copy()
@@ -40,7 +40,7 @@ def load_config():
 def save_config(data):
     """保存运行时配置。"""
     payload = merge_defaults(data)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+    with open(CONFIG_PATH, "w") as f:
         json.dump(payload, f)
 
 

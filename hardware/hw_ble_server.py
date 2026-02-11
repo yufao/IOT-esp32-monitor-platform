@@ -9,7 +9,6 @@ BLE GATT 服务（ESP32 端）
 """
 
 import sys  # 导入路径控制
-import os  # 路径工具
 import time  # 时间相关
 import json  # 数据序列化
 
@@ -77,6 +76,8 @@ class BleUartServer:
 
     self._connections = set()  # 连接句柄集合
     self._last_cmd = None  # 最近收到的命令
+    self._rx_buffer = b""  # 接收缓冲区（按行解析）
+    self._rx_last_ms = time.ticks_ms()  # 最近一次接收时间
     self._ready = True
 
     self._advertise(name)  # 开始广播
@@ -88,26 +89,52 @@ class BleUartServer:
     payload = _advertising_payload(name)
     # gap_advertise 的单位是微秒，配置使用毫秒需转换
     interval_us = int(BLE_ADV_INTERVAL_MS) * 1000
-    self._ble.gap_advertise(interval_us, adv_data=payload)
+    try:
+      self._ble.gap_advertise(interval_us, adv_data=payload)
+    except Exception:
+      pass
 
   def _irq(self, event, data):
     """BLE 事件回调。"""
     if event == _IRQ_CENTRAL_CONNECT:
       conn_handle, _, _ = data
       self._connections.add(conn_handle)
+      print("ble: connected", conn_handle)
     elif event == _IRQ_CENTRAL_DISCONNECT:
       conn_handle, _, _ = data
       if conn_handle in self._connections:
         self._connections.remove(conn_handle)
+      print("ble: disconnected", conn_handle)
       self._advertise(BLE_DEVICE_NAME)  # 断开后继续广播
     elif event == _IRQ_GATTS_WRITE:
       conn_handle, value_handle = data
       if value_handle == self._rx_handle:
         raw = self._ble.gatts_read(self._rx_handle)
-        try:
-          self._last_cmd = json.loads(raw.decode())
-        except Exception:
-          self._last_cmd = {"raw": raw}
+        print("ble: rx raw", raw)
+        # 追加到缓冲区，按换行分包
+        self._rx_buffer += raw
+        self._rx_last_ms = time.ticks_ms()
+
+        # 输出缓冲区长度，避免大对象打印导致内存压力
+        print("ble: rx buffer len=", len(self._rx_buffer))
+
+        if b"\n" in self._rx_buffer:
+          lines = self._rx_buffer.split(b"\n")
+          # 最后一段可能不完整，保留
+          self._rx_buffer = lines[-1]
+          for line in lines[:-1]:
+            if not line:
+              continue
+            try:
+              text = line.decode()
+              self._last_cmd = json.loads(text)
+              print("ble: rx json", self._last_cmd)
+            except Exception:
+              pass
+
+        # 缓冲过大则重置，避免占用内存
+        if len(self._rx_buffer) > 256:
+          self._rx_buffer = b""
 
   def is_ready(self):
     """BLE 是否可用。"""

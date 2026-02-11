@@ -37,6 +37,7 @@ Thumbs.db
 # Logs and runtime data
 logs/
 *.csv
+hardware/runtime_config.json
 
 # MicroPython
 *.mpy

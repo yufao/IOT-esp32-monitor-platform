@@ -96,9 +96,16 @@ async def send_ble_cmd(payload):
     """通过 BLE 写入指令。"""
     if not current_client:
         return False
-    data = json.dumps(payload).encode("utf-8")
+    # 末尾添加换行，便于 ESP32 按行解析
+    data = (json.dumps(payload) + "\n").encode("utf-8")
+    # BLE 写入常见单包 20 字节，手动分片发送
+    chunk_size = 20
     try:
-        await current_client.write_gatt_char(UART_RX, data)
+        for i in range(0, len(data), chunk_size):
+            chunk = data[i : i + chunk_size]
+            await current_client.write_gatt_char(UART_RX, chunk)
+            await asyncio.sleep(0.02)
+        print("ble send bytes:", len(data))
         return True
     except Exception:
         return False

@@ -13,7 +13,7 @@ except ImportError:
 
 # ---- 导入兜底：处理运行目录漂移 ----
 try:
-	from hw_config import DEVICE_ID, SERVER_URL, SAMPLE_INTERVAL_SEC, KEY1_PIN
+	from hw_config import DEVICE_ID, SERVER_URL, SAMPLE_INTERVAL_SEC, KEY1_PIN, WIFI_SSID, WIFI_PASSWORD
 except ImportError:
 	_fallback_paths = [
 		"/iot_ai_monitor/hardware",
@@ -23,7 +23,7 @@ except ImportError:
 	for _p in _fallback_paths:
 		if _p not in sys.path:
 			sys.path.append(_p)
-	from hw_config import DEVICE_ID, SERVER_URL, SAMPLE_INTERVAL_SEC, KEY1_PIN
+	from hw_config import DEVICE_ID, SERVER_URL, SAMPLE_INTERVAL_SEC, KEY1_PIN, WIFI_SSID, WIFI_PASSWORD
 
 try:
 	from hw_sensors import SensorManager
@@ -93,8 +93,9 @@ def main():
 
 	# 读取运行时配置（WiFi/阈值）
 	runtime_cfg = load_config() if load_config else {"wifi": {}, "threshold": {}}
-	ssid = runtime_cfg.get("wifi", {}).get("ssid")
-	password = runtime_cfg.get("wifi", {}).get("password")
+	ssid = (runtime_cfg.get("wifi", {}).get("ssid") or WIFI_SSID or "").strip()
+	password = (runtime_cfg.get("wifi", {}).get("password") or WIFI_PASSWORD or "").strip()
+	print("wifi ssid:", ssid, "pwd:", "***" if password else "(empty)")
 
 	sensor = SensorManager()  # 传感器管理器
 	uploader = WifiUploader(ssid=ssid, password=password, url=SERVER_URL) if channel == "WIFI" else None  # WiFi 上报器
@@ -110,6 +111,7 @@ def main():
 	last_connect_try = time.ticks_ms()  # 上次连接尝试时间
 	last_gc = time.ticks_ms()  # 上次 GC 时间
 	last_enqueue_fail = time.ticks_ms()  # 上次入队失败时间
+	last_ble_report = time.ticks_ms()  # BLE 状态输出时间
 
 	# 启动阶段只触发一次非阻塞连接
 	if channel == "WIFI" and uploader:
@@ -143,6 +145,7 @@ def main():
 		if channel == "BLE" and ble and ble.is_ready():
 			cmd = ble.pop_last_cmd()
 			if isinstance(cmd, dict):
+				print("ble cmd:", cmd)
 				cmd_type = cmd.get("type")
 				if cmd_type == "wifi":
 					ssid = cmd.get("ssid", "")
@@ -150,7 +153,7 @@ def main():
 					runtime_cfg["wifi"] = {"ssid": ssid, "password": password}
 					if save_config:
 						save_config(runtime_cfg)
-					print("wifi updated via ble")
+					print("wifi updated via ble:", ssid, "pwd:", "***" if password else "(empty)")
 					# 立刻切回 WiFi 尝试连接
 					channel = "WIFI"
 					set_wifi_enabled(True)
@@ -198,15 +201,14 @@ def main():
 
 				print("send:", "ok" if ok else "fail", info)  # 上报状态
 			else:
-				# BLE 模式：发送数据到桌面端
-				if ble and ble.is_ready():
+				# BLE 模式：仅在连接后发送数据
+				if ble and ble.is_ready() and ble.is_connected():
 					ble.send_json(payload)
 				else:
-					# BLE 不可用时输出摘要
-					env = payload.get("environment", {})
-					bmp = env.get("bmp280", {})
-					light = env.get("light", {})
-					print("ble mode: temp=", bmp.get("temp"), "press=", bmp.get("pressure"), "light%=", light.get("percent"))
+					# 未连接时每隔一段时间输出提示
+					if time.ticks_diff(now, last_ble_report) >= 3000:
+						print("ble: not connected")
+						last_ble_report = now
 
 			last_send = now  # 更新上报时间
 

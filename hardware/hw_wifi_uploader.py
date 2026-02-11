@@ -9,6 +9,7 @@ WiFi 连接与数据上报（非阻塞/可扩展）
 import time
 import sys
 import os
+import socket
 
 # 兼容不同运行目录：确保能找到 hw_config
 try:
@@ -46,9 +47,14 @@ class WifiUploader:
         self._next_retry = 0
         self._retry_interval_ms = 3000
         self._max_retry_ms = 20000
+        self._timeout_s=5        # 超时秒数
 
         if self.wlan:
             self.wlan.active(True)
+        try:
+            socket.setdefaulttimeout(self._timeout_s)  # 设置全局默认超时
+        except Exception:
+            pass
 
     def is_connected(self):
         return self.wlan and self.wlan.isconnected()
@@ -92,7 +98,7 @@ class WifiUploader:
             return False, "urequests-missing"
 
         try:
-            resp = requests.post(self.url, json=payload, timeout=timeout)
+            resp = requests.post(self.url, json=payload)
             status = resp.status_code
             resp.close()
             return True, status

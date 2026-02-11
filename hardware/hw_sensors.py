@@ -1,7 +1,6 @@
 import time
 import machine
 import sys
-import os
 
 # 兼容不同运行目录：确保能找到 hw_config
 try:
