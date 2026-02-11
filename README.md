@@ -11,8 +11,25 @@
 - tests：测试脚本（链路测试、联调测试）
 
 ## 开发约定
-- 不修改原有学习目录代码；所有新功能仅在本目录开发。
-- 公共工具优先复用 ESP32/utils，新增工具放入 utils 并保持命名规范。
+1. 敏感配置写入 `hardware/hw_config.py`，不提交仓库。
+2. 运行时配置写入 `hardware/runtime_config.json`（由设备端自动生成）。
+3. BLE 指令使用 JSON 格式，字段保持稳定。
 
-## 进度提示
+
+## 开发计划
 请先查看 docs/01_项目规划与阶段目标.md
+
+## 快速开始（当前可用链路）
+1. 硬件端：运行 `hardware/main.py`，按 KEY1 切换 BLE。
+2. 桌面端：进入 `desktop` 目录执行 `npm start`。
+3. BLE 连接成功后，可实时查看温度/气压/光敏数据。
+
+## BLE 指令格式
+WiFi 配网：
+```json
+{"type":"wifi","ssid":"YOUR_SSID","password":"YOUR_PASS"}
+```
+阈值设置：
+```json
+{"type":"threshold","temp_high":30,"temp_low":15}
+```

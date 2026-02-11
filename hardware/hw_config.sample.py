@@ -41,8 +41,8 @@ SD_CS_PIN = 5  # SPI 片选
 
 
 # ============ WiFi 配置 ============
-WIFI_SSID = "*"  # WiFi 名称
-WIFI_PASSWORD = "***"  # WiFi 密码
+WIFI_SSID = "YOUR_SSID"  # WiFi 名称
+WIFI_PASSWORD = "YOUR_PASSWORD"  # WiFi 密码
 
 # ============ 服务端地址 ============
 SERVER_URL = "http://httpbin.org/post"  # 后续上传用，先占位

@@ -41,6 +41,12 @@ try:
 except ImportError:
 	BleUartServer = None
 
+try:
+	from hw_runtime_config import load_config, save_config
+except ImportError:
+	load_config = None
+	save_config = None
+
 
 # ---- 信道切换（KEY1）----
 # 按下切换 WIFI <-> BLE
@@ -85,8 +91,13 @@ def main():
 	print("channel:", channel)  # 打印当前模式
 	set_wifi_enabled(True)  # 默认开启 WiFi
 
+	# 读取运行时配置（WiFi/阈值）
+	runtime_cfg = load_config() if load_config else {"wifi": {}, "threshold": {}}
+	ssid = runtime_cfg.get("wifi", {}).get("ssid")
+	password = runtime_cfg.get("wifi", {}).get("password")
+
 	sensor = SensorManager()  # 传感器管理器
-	uploader = WifiUploader(url=SERVER_URL) if channel == "WIFI" else None  # WiFi 上报器
+	uploader = WifiUploader(ssid=ssid, password=password, url=SERVER_URL) if channel == "WIFI" else None  # WiFi 上报器
 	ble = BleUartServer() if channel == "BLE" and BleUartServer else None  # BLE 服务
 	if ble:
 		print("ble ready:", ble.is_ready())  # 打印 BLE 可用状态
@@ -118,7 +129,7 @@ def main():
 					print("channel switched:", channel)
 					if channel == "WIFI":
 						set_wifi_enabled(True)
-						uploader = WifiUploader(url=SERVER_URL)
+						uploader = WifiUploader(ssid=ssid, password=password, url=SERVER_URL)
 						uploader.connect_step(now)  # 非阻塞连接
 						ble = None
 					else:
@@ -127,6 +138,36 @@ def main():
 						ble = BleUartServer() if BleUartServer else None
 						if ble:
 							print("ble ready:", ble.is_ready())  # 打印 BLE 可用状态
+
+		# BLE 指令处理（WiFi 配网 / 阈值设置）
+		if channel == "BLE" and ble and ble.is_ready():
+			cmd = ble.pop_last_cmd()
+			if isinstance(cmd, dict):
+				cmd_type = cmd.get("type")
+				if cmd_type == "wifi":
+					ssid = cmd.get("ssid", "")
+					password = cmd.get("password", "")
+					runtime_cfg["wifi"] = {"ssid": ssid, "password": password}
+					if save_config:
+						save_config(runtime_cfg)
+					print("wifi updated via ble")
+					# 立刻切回 WiFi 尝试连接
+					channel = "WIFI"
+					set_wifi_enabled(True)
+					uploader = WifiUploader(ssid=ssid, password=password, url=SERVER_URL)
+					uploader.connect_step(now)
+					ble = None
+				elif cmd_type == "threshold":
+					try:
+						high = float(cmd.get("temp_high"))
+						low = float(cmd.get("temp_low"))
+					except Exception:
+						high, low = None, None
+					if high is not None and low is not None:
+						runtime_cfg["threshold"] = {"temp_high": high, "temp_low": low}
+						if save_config:
+							save_config(runtime_cfg)
+						print("threshold updated via ble")
 
 		# WiFi 模式下：定时尝试重连（非阻塞）
 		if channel == "WIFI" and uploader:
