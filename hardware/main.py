@@ -47,6 +47,10 @@ except ImportError:
 	load_config = None
 	save_config = None
 
+try:
+	from hw_sd_card import SDCardManager
+except ImportError:
+	SDCardManager=None
 
 # ---- 信道切换（KEY1）----
 # 按下切换 WIFI <-> BLE
@@ -91,6 +95,17 @@ def main():
 	print("channel:", channel)  # 打印当前模式
 	set_wifi_enabled(True)  # 默认开启 WiFi
 
+	# SD卡挂载
+	sd=None
+	if SDCardManager:
+		# 启动延迟，降低瞬时电流导致的 brownout 风险
+		time.sleep_ms(1200)
+		sd = SDCardManager()
+		ok,info=sd.mount()
+		print("sd mount:", "ok" if ok else "fail", info)
+		if ok:
+			sd.log_line("runtime.log","boot ok")
+
 	# 读取运行时配置（WiFi/阈值）
 	runtime_cfg = load_config() if load_config else {"wifi": {}, "threshold": {}}
 	ssid = (runtime_cfg.get("wifi", {}).get("ssid") or WIFI_SSID or "").strip()
@@ -112,6 +127,7 @@ def main():
 	last_gc = time.ticks_ms()  # 上次 GC 时间
 	last_enqueue_fail = time.ticks_ms()  # 上次入队失败时间
 	last_ble_report = time.ticks_ms()  # BLE 状态输出时间
+	last_sd_log = time.ticks_ms()	#上次挂载的时间
 
 	# 启动阶段只触发一次非阻塞连接
 	if channel == "WIFI" and uploader:
@@ -212,6 +228,10 @@ def main():
 
 			last_send = now  # 更新上报时间
 
+		if sd and time.ticks_diff(now,last_sd_log) >= 60000:
+			sd.log_line("runtime.log", "alive")
+			last_sd_log = now
+			
 		# 内存监控
 		if time.ticks_diff(now, last_mem) >= MEM_LOG_INTERVAL_MS:
 			print("mem_free:", gc.mem_free())  # 打印可用内存
@@ -230,4 +250,5 @@ def main():
 
 
 if __name__ == "__main__":
+
 	main()  # 入口
