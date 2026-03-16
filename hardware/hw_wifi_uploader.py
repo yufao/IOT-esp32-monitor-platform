@@ -25,6 +25,12 @@ except ImportError:
             sys.path.append(p)
     from hw_config import WIFI_SSID, WIFI_PASSWORD, SERVER_URL
 
+# 可选：HTTP 备用通道鉴权（与 server 端 API_KEYS 对齐）
+try:
+    from hw_config import API_KEY
+except Exception:
+    API_KEY = None
+
 try:
     import network
 except ImportError:
@@ -55,6 +61,14 @@ class WifiUploader:
             socket.setdefaulttimeout(self._timeout_s)  # 设置全局默认超时
         except Exception:
             pass
+
+        # 认证头（可选；用于 /api/telemetry）
+        self._auth_header = None
+        try:
+            if API_KEY:
+                self._auth_header = {"Authorization": "Bearer %s" % API_KEY}
+        except Exception:
+            self._auth_header = None
 
     def is_connected(self):
         return self.wlan and self.wlan.isconnected()
@@ -98,7 +112,8 @@ class WifiUploader:
             return False, "urequests-missing"
 
         try:
-            resp = requests.post(self.url, json=payload)
+            headers = self._auth_header
+            resp = requests.post(self.url, json=payload, headers=headers) if headers else requests.post(self.url, json=payload)
             status = resp.status_code
             resp.close()
             return True, status

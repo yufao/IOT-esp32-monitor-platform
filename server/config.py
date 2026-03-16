@@ -27,3 +27,7 @@ CORS_ORIGINS = [o.strip() for o in _env("SLS_CORS_ORIGINS", "*").split(",") if o
 # API Key：逗号分隔，允许多个设备/环境共存
 # 例："dev_key_1,dev_key_2"
 API_KEYS = {k.strip() for k in _env("SLS_API_KEYS", "dev_key").split(",") if k.strip()}
+
+# 设备离线判定：超过 last_seen + TTL 视为 offline（尤其用于 HTTP 兜底设备）
+# 默认 60 秒；可通过环境变量覆盖。
+DEVICE_OFFLINE_TTL_SEC = int(_env("SLS_DEVICE_OFFLINE_TTL_SEC", "60"))

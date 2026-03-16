@@ -5,6 +5,7 @@ import sys  # 导入路径控制
 import os  # 路径工具
 import gc  # 内存监控
 import machine  # GPIO 与系统接口
+import json  # WS 命令解析
 
 try:
 	import network  # WiFi 控制
@@ -111,6 +112,8 @@ def main():
 	cache_enabled = False  # 失败重试缓存开关（默认关闭）
 	print("cache_enabled:", cache_enabled)
 
+	send_interval_ms = SEND_INTERVAL_MS
+
 	# SD卡挂载
 	sd=None
 	if SDCardManager:
@@ -124,6 +127,13 @@ def main():
 
 	# 读取运行时配置（WiFi/阈值）
 	runtime_cfg = load_config() if load_config else {"wifi": {}, "threshold": {}}
+	# 运行时采样周期（可被命令下发修改）
+	try:
+		_cfg_interval = runtime_cfg.get("sample", {}).get("interval_sec")
+		if _cfg_interval is not None:
+			send_interval_ms = max(500, int(float(_cfg_interval) * 1000))
+	except Exception:
+		pass
 	ssid = (runtime_cfg.get("wifi", {}).get("ssid") or WIFI_SSID or "").strip()
 	password = (runtime_cfg.get("wifi", {}).get("password") or WIFI_PASSWORD or "").strip()
 	print("wifi ssid:", ssid, "pwd:", "***" if password else "(empty)")
@@ -251,13 +261,20 @@ def main():
 		payload = sensor.collect_data(now)  # 构建数据包
 
 		# 周期上报
-		if time.ticks_diff(now, last_send) >= SEND_INTERVAL_MS:
+		if time.ticks_diff(now, last_send) >= send_interval_ms:
 			if channel == "WIFI" and uploader:
 				ok, info = (False, "not-sent")
+				seq += 1
+				http_payload = {
+					"device_id": DEVICE_ID,
+					"timestamp": payload.get("timestamp"),
+					"environment": payload.get("environment"),
+					"seq": seq,
+					"is_buffered": False,
+				}
 
 				# 优先使用 WebSocket 直连
 				if ws_client and ws_client.is_connected():
-					seq += 1
 					msg = {
 						"type": "telemetry",
 						"device_id": DEVICE_ID,
@@ -268,6 +285,10 @@ def main():
 					}
 					ok = ws_client.send_json(msg)
 					info = "ws" if ok else "ws-fail"
+					# WS 发送失败时：立刻尝试 HTTP 备用，避免 cache_enabled=False 时直接丢数据
+					if not ok:
+						ok, info = uploader.post_json(http_payload)
+						info = "http-after-ws" if ok else info
 				else:
 					# WebSocket 不可用时，HTTP 作为备用链路
 					# 优先重发队列（仅当 cache_enabled=True 时才会入队）
@@ -276,17 +297,75 @@ def main():
 						if ok:
 							retry_queue.pop(0)
 					else:
-						ok, info = uploader.post_json(payload)
+						ok, info = uploader.post_json(http_payload)
 
-				# 断网时入队节流，避免内存膨胀
+				# 断网/失败时入队节流，避免内存膨胀（仅当 cache_enabled=True）
 				if not ok and cache_enabled:
 					if info != "wifi-disconnected" or time.ticks_diff(now, last_enqueue_fail) >= ENQUEUE_COOLDOWN_MS:
-						enqueue(retry_queue, payload)
+						http_payload["is_buffered"] = True
+						enqueue(retry_queue, http_payload)
 						last_enqueue_fail = now
 
-				# 尽力读取 ack，避免接收缓冲堆积（缓存默认关闭，不强依赖 ack）
+				# 尽力读取服务器消息：ACK / command（不强依赖，避免接收缓冲堆积）
 				if ws_client and ws_client.is_connected():
-					_ = ws_client.recv_once()
+					raw = ws_client.recv_once()
+					if raw:
+						try:
+							if isinstance(raw, bytes):
+								raw = raw.decode()
+							msg = json.loads(raw)
+						except Exception:
+							msg = None
+
+						# 仅处理 command（其他如 ack 忽略即可）
+						if isinstance(msg, dict) and msg.get("type") == "command":
+							cmd_id = msg.get("cmd_id")
+							cmd = msg.get("command")
+							ok_cmd = False
+							err = None
+							result = None
+							try:
+								if not isinstance(cmd, dict):
+									raise ValueError("command_required")
+								t = (cmd.get("type") or "").strip()
+								if t == "set_threshold":
+									high = float(cmd.get("temp_high"))
+									low = float(cmd.get("temp_low"))
+									runtime_cfg["threshold"] = {"temp_high": high, "temp_low": low}
+									if save_config:
+										save_config(runtime_cfg)
+									result = {"temp_high": high, "temp_low": low}
+									ok_cmd = True
+								elif t == "set_sample_interval":
+									interval_sec = float(cmd.get("sample_interval_sec"))
+									interval_sec = 0.5 if interval_sec < 0.5 else interval_sec
+									runtime_cfg.setdefault("sample", {})
+									runtime_cfg["sample"]["interval_sec"] = interval_sec
+									if save_config:
+										save_config(runtime_cfg)
+									send_interval_ms = max(500, int(interval_sec * 1000))
+									result = {"sample_interval_sec": interval_sec}
+									ok_cmd = True
+								else:
+									raise ValueError("unknown_command_type")
+							except Exception as exc:
+								ok_cmd = False
+								err = str(exc)
+
+							# 回执给 server（best-effort）
+							try:
+								ack = {
+									"type": "cmd_ack",
+									"device_id": DEVICE_ID,
+									"cmd_id": cmd_id,
+									"ok": bool(ok_cmd),
+									"result": result,
+									"error": err,
+									"timestamp": time.time(),
+								}
+								ws_client.send_json(ack)
+							except Exception:
+								pass
 				print("send:", "ok" if ok else "fail", info)  # 上报状态
 			else:
 				# BLE 模式：仅在连接后发送数据

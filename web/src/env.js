@@ -2,6 +2,10 @@ export function getApiBase() {
   return (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:5000').replace(/\/$/, '');
 }
 
+export function getApiKey() {
+  return (import.meta.env.VITE_API_KEY || '').trim();
+}
+
 export function getWsDashboardUrl() {
   const apiBase = getApiBase();
   return (

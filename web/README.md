@@ -19,9 +19,11 @@
 
 - `VITE_API_BASE`：后端 HTTP 基地址（默认 `http://127.0.0.1:5000`）
 - `VITE_WS_DASHBOARD_URL`：dashboard WebSocket 地址（默认从 API_BASE 推导为 `ws://.../ws/dashboard`）
+- `VITE_API_KEY`：用于调用需要鉴权的接口（例如 `POST /api/commands/send`）的 Bearer Key
 
 示例（Windows PowerShell）：
 - `$env:VITE_API_BASE = "http://127.0.0.1:5000"`
+- `$env:VITE_API_KEY = "<your_api_key>"`
 
 ## 启动
 
@@ -32,3 +34,8 @@
 
 浏览器访问：
 - `http://127.0.0.1:5173/`
+
+## 页面
+
+- `/`：首页（监控 + 历史回放 + 配置参数框）
+- `/device/:id`：设备详情页（信息/参数/配置下发）

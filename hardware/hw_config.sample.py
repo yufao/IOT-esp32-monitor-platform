@@ -45,7 +45,7 @@ WIFI_SSID = "YOUR_SSID"  # WiFi 名称
 WIFI_PASSWORD = "YOUR_PASSWORD"  # WiFi 密码
 
 # ============ 服务端地址 ============
-SERVER_URL = "http://httpbin.org/post"  # 后续上传用，先占位
+SERVER_URL = "http://127.0.0.1:5000/api/telemetry"  # HTTP 备用上报通道（与 Server /api/telemetry 对齐）
 
 # ============ WebSocket 直连（路线A）===========
 # ESP32 直连服务端 WebSocket（telemetry 通道）

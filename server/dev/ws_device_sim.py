@@ -82,4 +82,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("stopped")
+    except asyncio.CancelledError:
+        print("stopped")

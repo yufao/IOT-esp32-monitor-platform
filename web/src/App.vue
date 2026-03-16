@@ -13,40 +13,12 @@
         <el-statistic title="设备" :value="totalCount" />
         <el-statistic title="在线" :value="onlineCount" />
         <el-button type="primary" @click="refresh" :loading="refreshing">刷新快照</el-button>
+        <el-button v-if="showBack" @click="goHome">返回首页</el-button>
       </div>
     </el-header>
 
     <el-main class="main">
-      <el-row :gutter="12">
-        <el-col :xs="24" :lg="14">
-          <DeviceTable
-            :devices="devices"
-            :latestById="latestById"
-            :selectedDeviceId="selectedDeviceId"
-            :wsConnected="wsConnected"
-            :formatTs="formatTs"
-            @select="onSelect"
-          />
-        </el-col>
-        <el-col :xs="24" :lg="10">
-          <TelemetryChart :deviceId="selectedDeviceId" :series="selectedSeries" />
-
-          <el-card class="card" shadow="never" style="margin-top: 12px;">
-            <template #header>
-              <div class="cardHeader">
-                <div>
-                  <div class="title">最近消息</div>
-                  <div class="sub">用于联调与协议演进</div>
-                </div>
-                <el-tag effect="light" :type="wsConnected ? 'success' : 'warning'">
-                  {{ wsConnected ? '实时推送中' : '等待连接' }}
-                </el-tag>
-              </div>
-            </template>
-            <pre class="pre">{{ lastMsgText }}</pre>
-          </el-card>
-        </el-col>
-      </el-row>
+      <router-view />
     </el-main>
   </el-container>
 </template>
@@ -54,16 +26,17 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import { useRoute, useRouter } from 'vue-router';
 
 import { getApiBase, getWsDashboardUrl } from './env';
 import { fetchSnapshot } from './api/rest';
 import { connectDashboardWs } from './ws/dashboard';
 import { useMonitorStore } from './stores/monitor';
 
-import DeviceTable from './components/DeviceTable.vue';
-import TelemetryChart from './components/TelemetryChart.vue';
-
 const store = useMonitorStore();
+
+const route = useRoute();
+const router = useRouter();
 
 const apiBase = getApiBase();
 const wsUrl = getWsDashboardUrl();
@@ -71,19 +44,14 @@ const wsUrl = getWsDashboardUrl();
 const refreshing = ref(false);
 let wsConn = null;
 
-const devices = computed(() => store.devicesList);
-const latestById = computed(() => store.latestById);
-const selectedDeviceId = computed(() => store.selectedDeviceId);
-const selectedSeries = computed(() => store.selectedSeries);
 const wsConnected = computed(() => store.wsConnected);
-const lastMsgText = computed(() => store.lastMsgText);
-
 const totalCount = computed(() => store.totalCount);
 const onlineCount = computed(() => store.onlineCount);
-const formatTs = store.formatTs;
 
-function onSelect(deviceId) {
-  store.setSelected(deviceId);
+const showBack = computed(() => route.name === 'device');
+
+function goHome() {
+  router.push({ name: 'home' });
 }
 
 async function refresh() {
@@ -125,6 +93,17 @@ function handleWsMessage(text) {
       status: msg.status || msg.data?.status,
       last_seen: msg.last_seen || msg.data?.last_seen,
     });
+    return;
+  }
+
+  if (msg.type === 'command_sent') {
+    store.applyCommandSent(msg);
+    return;
+  }
+
+  if (msg.type === 'command_ack') {
+    store.applyCommandAck(msg);
+    return;
   }
 }
 
@@ -162,6 +141,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 14px 16px;
+  background: var(--el-bg-color);
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 .brand {
@@ -170,7 +151,9 @@ onBeforeUnmount(() => {
   gap: 2px;
 }
 .name {
-  font-weight: 700;
+  font-weight: 800;
+  font-size: 20px;
+  letter-spacing: 0.2px;
 }
 .meta {
   display: flex;
@@ -194,6 +177,12 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
 }
+
+/* 修复“刷新快照”按钮 loading 时宽度变化引起的布局抖动 */
+.actions :deep(.el-button) {
+  min-width: 112px;
+  justify-content: center;
+}
 .main {
   padding-top: 12px;
 }
@@ -214,10 +203,18 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 12px;
   line-height: 1.4;
+  overflow: auto;
   padding: 12px;
   background: var(--el-fill-color-light);
   border-radius: 8px;
   max-height: 220px;
   overflow: auto;
+}
+
+.historyRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
 }
 </style>

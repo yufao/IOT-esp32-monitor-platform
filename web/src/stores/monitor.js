@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { fetchTelemetryHistory } from '../api/rest';
 
 function nowMs() {
   return Date.now();
@@ -34,6 +35,8 @@ export const useMonitorStore = defineStore('monitor', {
     wsUrl: null,
     lastMsgText: '(no data)',
     lastMsgAtMs: null,
+
+    lastCommandByDeviceId: {}, // { [deviceId]: { sent?: {...}, ack?: {...} } }
   }),
 
   getters: {
@@ -136,6 +139,78 @@ export const useMonitorStore = defineStore('monitor', {
       if (lightPercent !== null) pushPoint(series.light, [ts * 1000, lightPercent]);
 
       if (!this.selectedDeviceId) this.selectedDeviceId = t.device_id;
+    },
+
+    applyCommandSent(evt) {
+      if (!evt || !evt.device_id) return;
+      const existing = this.lastCommandByDeviceId[evt.device_id] || {};
+      this.lastCommandByDeviceId[evt.device_id] = { ...existing, sent: evt };
+    },
+
+    applyCommandAck(evt) {
+      if (!evt || !evt.device_id) return;
+      const existing = this.lastCommandByDeviceId[evt.device_id] || {};
+      this.lastCommandByDeviceId[evt.device_id] = { ...existing, ack: evt };
+
+      // 立即回显“最后已知配置”（与 server 侧逻辑对齐，MVP 仅阈值/采样间隔）
+      if (!evt.ok) return;
+      const cmd = evt.command || {};
+      const t = cmd.type;
+      if (t !== 'set_threshold' && t !== 'set_sample_interval') return;
+
+      const d = this.devicesById[evt.device_id] || { device_id: evt.device_id };
+      const caps = typeof d.capabilities === 'object' && d.capabilities ? { ...d.capabilities } : {};
+      const cfg = typeof caps.config === 'object' && caps.config ? { ...caps.config } : {};
+
+      if (t === 'set_threshold') {
+        cfg.temp_high = cmd.temp_high;
+        cfg.temp_low = cmd.temp_low;
+      }
+      if (t === 'set_sample_interval') {
+        cfg.sample_interval_sec = cmd.sample_interval_sec;
+      }
+      caps.config = cfg;
+      this.devicesById[evt.device_id] = { ...d, capabilities: caps };
+    },
+
+    async loadHistory({ deviceId, sinceTs = null, untilTs = null, limit = 500 } = {}) {
+      const id = deviceId || this.selectedDeviceId;
+      if (!id) throw new Error('no device selected');
+
+      const items = await fetchTelemetryHistory({
+        deviceId: id,
+        since: sinceTs || undefined,
+        until: untilTs || undefined,
+        limit,
+      });
+
+      // 重建曲线数据（保持与 applyTelemetry 相同的数据结构）
+      const series = { temp: [], pressure: [], light: [] };
+      for (const t of items) {
+        const env = t.environment || {};
+        const bmp = env.bmp280 || {};
+        const light = env.light || {};
+
+        const ts = toNumberOrNull(t.timestamp);
+        if (!ts) continue;
+
+        const temp = toNumberOrNull(bmp.temp);
+        const pressure = toNumberOrNull(bmp.pressure);
+        const lightPercent = toNumberOrNull(light.percent);
+
+        if (temp !== null) pushPoint(series.temp, [ts * 1000, temp], limit);
+        if (pressure !== null) pushPoint(series.pressure, [ts * 1000, pressure], limit);
+        if (lightPercent !== null) pushPoint(series.light, [ts * 1000, lightPercent], limit);
+      }
+
+      this.seriesById[id] = series;
+      // 同步 latest（如果 history 有数据）
+      if (items.length) {
+        this.latestById[id] = items[items.length - 1];
+      }
+      if (!this.selectedDeviceId) this.selectedDeviceId = id;
+
+      return items.length;
     },
   },
 });

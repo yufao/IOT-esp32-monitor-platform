@@ -1,5 +1,8 @@
 :root {
 	font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
 }
 
 html,
@@ -15,4 +18,28 @@ body {
 
 #app {
 	height: 100%;
+}
+
+/* 统一卡片观感：圆角 + 轻阴影 + 悬停反馈（仅使用 Element Plus 主题变量） */
+.el-card.card {
+	border-radius: calc(var(--el-border-radius-base) + 6px);
+	border: 1px solid var(--el-border-color-lighter);
+	box-shadow: var(--el-box-shadow-lighter);
+	transition: box-shadow 160ms ease, transform 160ms ease, border-color 160ms ease;
+}
+
+.el-card.card:hover {
+	box-shadow: var(--el-box-shadow-light);
+	transform: translateY(-1px);
+	border-color: var(--el-border-color);
+}
+
+/* 按钮、标签等的小幅动效统一 */
+.el-button,
+.el-tag {
+	transition: transform 120ms ease;
+}
+
+.el-button:hover {
+	transform: translateY(-1px);
 }

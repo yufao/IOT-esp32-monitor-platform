@@ -107,6 +107,10 @@
 
 备注：模板 `hw_config.sample.py` 已提供以上字段。
 
+另外（可选）：HTTP 备用上报通道（当 WS 不可用/异常时兜底）
+- `SERVER_URL`：例如 `http://<server>:5000/api/telemetry`
+- 鉴权：硬件端会使用 `API_KEY` 自动加上 `Authorization: Bearer <api_key>`（与 `SLS_API_KEYS` 对齐）
+
 ---
 
 ## 4. 远端类 CentOS（阿里云）部署建议（生产/演示）

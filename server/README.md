@@ -34,6 +34,37 @@
 	- 鉴权通过后才接受 `type=telemetry` 消息，并返回 `type=ack`
 - `ws://<host>:5000/ws/dashboard`
 	- Web 订阅端，连接后会收到 `snapshot`，之后接收 `telemetry` 与 `device_status` 广播
+	- 也会收到控制面事件：`command_sent` / `command_ack`
+
+## HTTP（备用上报通道）
+
+当设备端 WebSocket 不可用时，可使用 HTTP 作为兜底：
+
+- `POST http://<host>:5000/api/telemetry`
+- Header：`Authorization: Bearer <api_key>`（与环境变量 `SLS_API_KEYS` 对齐）
+- Body：`{ device_id, timestamp, environment, seq?, is_buffered? }`
+
+## 命令下发（控制面 MVP）
+
+- `POST http://<host>:5000/api/commands/send`
+	- Header：`Authorization: Bearer <api_key>`（与环境变量 `SLS_API_KEYS` 对齐）
+	- Body：`{ device_id, command }`
+		- `command.type = set_threshold`：`{type,temp_high,temp_low}`
+		- `command.type = set_sample_interval`：`{type,sample_interval_sec}`
+
+设备回执：设备通过 `/ws/telemetry` 回传 `type=cmd_ack`，server 会广播 `command_ack` 到 dashboard。
+
+## Telemetry 历史（SQLite）
+
+Phase1 起将 telemetry 持久化到 SQLite，便于回放/曲线与排障：
+
+- `GET http://<host>:5000/api/telemetry/history?device_id=<id>&since=<ts>&until=<ts>&limit=<n>`
+	- `since/until`：Unix 秒（可选）
+	- `limit`：默认 200，最大 2000
+
+数据库文件：
+- 默认：`server/data/sls.db`
+- 可通过环境变量覆盖：`SLS_DB_PATH`
 
 ## 环境变量
 
@@ -42,3 +73,4 @@
 - `SLS_DEBUG`：是否调试（`1`/`0`）
 - `SLS_API_KEYS`：逗号分隔的 api_key 列表（默认 `dev_key`）
 - `SLS_CORS_ORIGINS`：REST 的 CORS 白名单（默认 `*`）
+- `SLS_DEVICE_OFFLINE_TTL_SEC`：离线判定阈值（秒，默认 `60`；主要用于 HTTP 兜底设备）
