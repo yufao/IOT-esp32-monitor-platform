@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-SD/TF 卡管理器（优先 SDMMC，其次 SPI）
+SD/TF 卡管理器（支持 SPI / SDMMC 自动切换）
 说明：
-- 普中-ESP32 板载 TF 卡槽通常走 SDMMC
-- SPI 方式作为兜底
+- 当前项目默认按普中开发板资料优先使用 SPI
+- 也保留 SDMMC 作为兼容兜底
 """
 
 import time  # 时间戳
@@ -22,6 +22,7 @@ except ImportError:
 # 兼容不同运行目录：确保能找到 hw_config
 try:
     from hw_config import (
+        SD_MOUNT_MODE,
         SDMMC_SLOT,
         SD_SCK_PIN,
         SD_MOSI_PIN,
@@ -42,6 +43,7 @@ except ImportError:
         if _p not in sys.path:
             sys.path.append(_p)
     from hw_config import (
+        SD_MOUNT_MODE,
         SDMMC_SLOT,
         SD_SCK_PIN,
         SD_MOSI_PIN,
@@ -59,6 +61,7 @@ class SDCardManager:
     def __init__(self, **config):
         # 合并配置（默认来自 hw_config）
         self.config = {
+            "mode": SD_MOUNT_MODE,
             "sdmmc_slot": SDMMC_SLOT,
             "spi_id": SPI_ID,
             "sck": SD_SCK_PIN,
@@ -70,11 +73,77 @@ class SDCardManager:
         }
         self.config.update(config)
 
+        baudrate = self.config.get("baudrate")
+        if not isinstance(baudrate, int) or baudrate <= 0:
+            self.config["baudrate"] = None
+
         self.mount_point = self.config["mount_point"]
         self._mounted = False
         self._spi = None
         self._sd = None
         self._vfs = None
+
+    def _ensure_mount_dir(self):
+        try:
+            uos.mkdir(self.mount_point)
+        except OSError:
+            pass
+
+    def _mount_sdmmc(self):
+        try:
+            self._sd = machine.SDCard(slot=self.config["sdmmc_slot"])
+            self._ensure_mount_dir()
+            self._vfs = uos.VfsFat(self._sd)
+            uos.mount(self._vfs, self.mount_point)
+            self._mounted = True
+            return True, "mounted-sdmmc"
+        except Exception as e:
+            self._cleanup()
+            return False, "sdmmc-failed: {}".format(e)
+
+    def _mount_spi_once(self, baudrate):
+        cs_pin = machine.Pin(self.config["cs"], machine.Pin.OUT, value=1)
+        if baudrate is not None:
+            self._spi = machine.SPI(
+                self.config["spi_id"],
+                baudrate=baudrate,
+                polarity=0,
+                phase=0,
+                sck=machine.Pin(self.config["sck"]),
+                mosi=machine.Pin(self.config["mosi"]),
+                miso=machine.Pin(self.config["miso"]),
+            )
+        else:
+            # 与普中原厂示例完全保持一致
+            self._spi = machine.SPI(
+                self.config["spi_id"],
+                sck=machine.Pin(self.config["sck"]),
+                mosi=machine.Pin(self.config["mosi"]),
+                miso=machine.Pin(self.config["miso"]),
+            )
+        self._sd = sdcard.SDCard(self._spi, cs_pin)
+        self._ensure_mount_dir()
+        # 按原厂示例直接挂载块设备；部分固件对这种方式兼容性更好
+        uos.mount(self._sd, self.mount_point)
+        self._mounted = True
+        return True, "mounted-spi@{}".format("default" if baudrate is None else baudrate)
+
+    def _mount_spi(self):
+        if sdcard is None:
+            return False, "sdcard-missing"
+
+        errors = []
+        tried = []
+        for baudrate in (self.config["baudrate"], 400000, 1000000, 200000):
+            if baudrate in tried:
+                continue
+            tried.append(baudrate)
+            try:
+                return self._mount_spi_once(baudrate)
+            except Exception as e:
+                errors.append("{}@{}".format(e, "default" if baudrate is None else baudrate))
+                self._cleanup()
+        return False, "spi-failed: {}".format(" | ".join(errors))
 
     def mount(self):
         """尝试挂载 SD 卡（先 SDMMC，再 SPI）。"""
@@ -84,46 +153,32 @@ class SDCardManager:
         if self._mounted:
             return True, "already-mounted"
 
-        # 1) 优先 SDMMC（板载卡槽）
-        try:
-            self._sd = machine.SDCard(slot=self.config["sdmmc_slot"])
-            try:
-                uos.mkdir(self.mount_point)
-            except OSError:
-                pass
-            self._vfs = uos.VfsFat(self._sd)
-            uos.mount(self._vfs, self.mount_point)
-            self._mounted = True
-            return True, "mounted-sdmmc"
-        except Exception:
-            pass
+        mode = self.config.get("mode", "SPI_FIRST")
+        attempts = []
 
-        # 2) SPI 方式兜底
-        if sdcard is None:
-            return False, "sdcard-missing"
+        if mode in ("SPI_FIRST", "SPI_ONLY"):
+            attempts = [self._mount_spi]
+            if mode == "SPI_FIRST":
+                attempts.append(self._mount_sdmmc)
+        elif mode in ("SDMMC_FIRST", "SDMMC_ONLY"):
+            attempts = [self._mount_sdmmc]
+            if mode == "SDMMC_FIRST":
+                attempts.append(self._mount_spi)
+        else:
+            attempts = [self._mount_spi, self._mount_sdmmc]
 
-        try:
-            self._spi = machine.SPI(
-                self.config["spi_id"],
-                baudrate=self.config["baudrate"],
-                polarity=0,
-                phase=0,
-                sck=machine.Pin(self.config["sck"]),
-                mosi=machine.Pin(self.config["mosi"]),
-                miso=machine.Pin(self.config["miso"]),
-            )
-            self._sd = sdcard.SDCard(self._spi, machine.Pin(self.config["cs"]))
+        errors = []
+        for fn in attempts:
             try:
-                uos.mkdir(self.mount_point)
-            except OSError:
-                pass
-            self._vfs = uos.VfsFat(self._sd)
-            uos.mount(self._vfs, self.mount_point)
-            self._mounted = True
-            return True, "mounted-spi"
-        except Exception as e:
-            self._cleanup()
-            return False, "mount-failed: {}".format(e)
+                ok, msg = fn()
+                if ok:
+                    return ok, msg
+                errors.append(msg)
+            except Exception as e:
+                errors.append("{}-exception: {}".format(fn.__name__, e))
+                self._cleanup()
+
+        return False, "mount-failed: {}".format(" | ".join(errors))
 
     def unmount(self):
         """卸载 SD 卡。"""

@@ -47,6 +47,16 @@ WIFI_PASSWORD = "YOUR_PASSWORD"  # WiFi 密码
 # ============ 服务端地址 ============
 SERVER_URL = "http://httpbin.org/post"  # 后续上传用，先占位
 
+# ============ WebSocket 直连（路线A）===========
+# ESP32 直连服务端 WebSocket（telemetry 通道）
+SERVER_WS_URL = "ws://127.0.0.1:5000/ws/telemetry"
+
+# 设备鉴权（比赛/MVP 简化版）：与服务端环境变量 SLS_API_KEYS 对齐
+API_KEY = "dev_key"
+
+# 固件版本（可手动维护；后续 OTA 会用到）
+FIRMWARE_VERSION = "0.1.0"
+
 
 # ============ 采样与上报频率 ============
 SAMPLE_INTERVAL_SEC = 1  # 采样间隔（秒）
@@ -63,4 +73,9 @@ BLE_ADV_INTERVAL_MS = 300
 
 # ============ KEY1 按键配置 ============
 KEY1_PIN = 14  # 目前 KEY1 接到 GPIO14
+
+# ============ KEY2 按键配置（测试阶段：缓存开关）===========
+# 注意：部分 ESP32 模组 GPIO6~11 可能连接板载 Flash，不一定可用。
+# 如出现异常，可改为其他空闲 GPIO。
+KEY2_PIN = 27  # KEY2 绑定 GPIO27（按下=启用失败重试缓存）
   

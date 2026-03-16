@@ -13,7 +13,7 @@ except ImportError:
 
 # ---- 导入兜底：处理运行目录漂移 ----
 try:
-	from hw_config import DEVICE_ID, SERVER_URL, SAMPLE_INTERVAL_SEC, KEY1_PIN, WIFI_SSID, WIFI_PASSWORD
+	from hw_config import DEVICE_ID, SERVER_URL, SAMPLE_INTERVAL_SEC, KEY1_PIN, KEY2_PIN, WIFI_SSID, WIFI_PASSWORD
 except ImportError:
 	_fallback_paths = [
 		"/iot_ai_monitor/hardware",
@@ -23,7 +23,12 @@ except ImportError:
 	for _p in _fallback_paths:
 		if _p not in sys.path:
 			sys.path.append(_p)
-	from hw_config import DEVICE_ID, SERVER_URL, SAMPLE_INTERVAL_SEC, KEY1_PIN, WIFI_SSID, WIFI_PASSWORD
+	try:
+		from hw_config import DEVICE_ID, SERVER_URL, SAMPLE_INTERVAL_SEC, KEY1_PIN, KEY2_PIN, WIFI_SSID, WIFI_PASSWORD
+	except ImportError:
+		# 向后兼容：旧版 hw_config 没有 KEY2_PIN
+		from hw_config import DEVICE_ID, SERVER_URL, SAMPLE_INTERVAL_SEC, KEY1_PIN, WIFI_SSID, WIFI_PASSWORD
+		KEY2_PIN = 27
 
 try:
 	from hw_sensors import SensorManager
@@ -35,6 +40,11 @@ try:
 	from hw_wifi_uploader import WifiUploader
 except ImportError:
 	from hw_wifi_uploader import WifiUploader
+
+try:
+	from hw_ws_client import WsTelemetryClient
+except ImportError:
+	WsTelemetryClient = None
 
 try:
 	from hw_ble_server import BleUartServer
@@ -55,6 +65,9 @@ except ImportError:
 # ---- 信道切换（KEY1）----
 # 按下切换 WIFI <-> BLE
 KEY1 = machine.Pin(KEY1_PIN, machine.Pin.IN, machine.Pin.PULL_UP)  # 输入上拉
+# ---- 缓存开关（KEY2）----
+# 按下切换“失败重试缓存”开关（仅内存队列；默认关闭）
+KEY2 = machine.Pin(KEY2_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
 KEY_DEBOUNCE_MS = 200  # 按键防抖时间
 
 
@@ -95,6 +108,9 @@ def main():
 	print("channel:", channel)  # 打印当前模式
 	set_wifi_enabled(True)  # 默认开启 WiFi
 
+	cache_enabled = False  # 失败重试缓存开关（默认关闭）
+	print("cache_enabled:", cache_enabled)
+
 	# SD卡挂载
 	sd=None
 	if SDCardManager:
@@ -113,7 +129,26 @@ def main():
 	print("wifi ssid:", ssid, "pwd:", "***" if password else "(empty)")
 
 	sensor = SensorManager()  # 传感器管理器
-	uploader = WifiUploader(ssid=ssid, password=password, url=SERVER_URL) if channel == "WIFI" else None  # WiFi 上报器
+	uploader = WifiUploader(ssid=ssid, password=password, url=SERVER_URL) if channel == "WIFI" else None  # HTTP 备用上报
+
+	# WebSocket 直连（优先使用；如配置缺失或模块不可用则跳过）
+	ws_client = None
+	seq = 0
+	if channel == "WIFI" and WsTelemetryClient:
+		try:
+			from hw_config import SERVER_WS_URL, API_KEY, FIRMWARE_VERSION
+		except Exception:
+			SERVER_WS_URL, API_KEY, FIRMWARE_VERSION = None, None, None
+		if SERVER_WS_URL and str(SERVER_WS_URL).startswith("ws") and API_KEY:
+			hello = {
+				"type": "hello",
+				"device_id": DEVICE_ID,
+				"api_key": API_KEY,
+				"firmware_version": FIRMWARE_VERSION or "0.0.0",
+				"protocol": 1,
+				"capabilities": {"bmp280": True, "light": True},
+			}
+			ws_client = WsTelemetryClient(url=SERVER_WS_URL, hello_payload=hello)
 	ble = BleUartServer() if channel == "BLE" and BleUartServer else None  # BLE 服务
 	if ble:
 		print("ble ready:", ble.is_ready())  # 打印 BLE 可用状态
@@ -123,6 +158,8 @@ def main():
 	last_mem = time.ticks_ms()  # 上次内存日志时间
 	last_key_change = time.ticks_ms()  # 防抖计时
 	last_key_state = KEY1.value()  # 初始按键状态
+	last_key2_change = time.ticks_ms()
+	last_key2_state = KEY2.value()
 	last_connect_try = time.ticks_ms()  # 上次连接尝试时间
 	last_gc = time.ticks_ms()  # 上次 GC 时间
 	last_enqueue_fail = time.ticks_ms()  # 上次入队失败时间
@@ -132,6 +169,8 @@ def main():
 	# 启动阶段只触发一次非阻塞连接
 	if channel == "WIFI" and uploader:
 		uploader.connect_step(time.ticks_ms())  # 非阻塞连接
+	if channel == "WIFI" and ws_client:
+		ws_client.connect_step(time.ticks_ms())
 
 	while True:
 		now = time.ticks_ms()  # 当前时间
@@ -156,6 +195,16 @@ def main():
 						ble = BleUartServer() if BleUartServer else None
 						if ble:
 							print("ble ready:", ble.is_ready())  # 打印 BLE 可用状态
+
+		# KEY2：切换失败重试缓存开关（不写 Flash/TF，仅控制内存 retry_queue 入队）
+		key2_state = KEY2.value()
+		if key2_state != last_key2_state:
+			if time.ticks_diff(now, last_key2_change) > KEY_DEBOUNCE_MS:
+				last_key2_change = now
+				last_key2_state = key2_state
+				if key2_state == 0:
+					cache_enabled = not cache_enabled
+					print("cache_enabled switched:", cache_enabled)
 
 		# BLE 指令处理（WiFi 配网 / 阈值设置）
 		if channel == "BLE" and ble and ble.is_ready():
@@ -193,6 +242,10 @@ def main():
 			if time.ticks_diff(now, last_connect_try) >= CONNECT_RETRY_MS:
 				uploader.connect_step(now)
 				last_connect_try = now
+		if channel == "WIFI" and ws_client:
+			# 复用同一个重连节奏
+			if time.ticks_diff(now, last_connect_try) >= CONNECT_RETRY_MS:
+				ws_client.connect_step(now)
 
 		# 持续采集数据（传感器模块内部非阻塞）
 		payload = sensor.collect_data(now)  # 构建数据包
@@ -200,21 +253,40 @@ def main():
 		# 周期上报
 		if time.ticks_diff(now, last_send) >= SEND_INTERVAL_MS:
 			if channel == "WIFI" and uploader:
-				ok, info = (False, "wifi-disconnected")
-				# 优先重发队列
-				if retry_queue:
-					ok, info = uploader.post_json(retry_queue[0])  # 发送最旧
-					if ok:
-						retry_queue.pop(0)  # 成功则移除
+				ok, info = (False, "not-sent")
+
+				# 优先使用 WebSocket 直连
+				if ws_client and ws_client.is_connected():
+					seq += 1
+					msg = {
+						"type": "telemetry",
+						"device_id": DEVICE_ID,
+						"seq": seq,
+						"timestamp": payload.get("timestamp"),
+						"environment": payload.get("environment"),
+						"is_buffered": False,
+					}
+					ok = ws_client.send_json(msg)
+					info = "ws" if ok else "ws-fail"
 				else:
-					ok, info = uploader.post_json(payload)  # 发送当前
+					# WebSocket 不可用时，HTTP 作为备用链路
+					# 优先重发队列（仅当 cache_enabled=True 时才会入队）
+					if retry_queue:
+						ok, info = uploader.post_json(retry_queue[0])
+						if ok:
+							retry_queue.pop(0)
+					else:
+						ok, info = uploader.post_json(payload)
 
 				# 断网时入队节流，避免内存膨胀
-				if not ok:
+				if not ok and cache_enabled:
 					if info != "wifi-disconnected" or time.ticks_diff(now, last_enqueue_fail) >= ENQUEUE_COOLDOWN_MS:
 						enqueue(retry_queue, payload)
 						last_enqueue_fail = now
 
+				# 尽力读取 ack，避免接收缓冲堆积（缓存默认关闭，不强依赖 ack）
+				if ws_client and ws_client.is_connected():
+					_ = ws_client.recv_once()
 				print("send:", "ok" if ok else "fail", info)  # 上报状态
 			else:
 				# BLE 模式：仅在连接后发送数据
