@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-cn">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TF/SD 管理</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo">SLS</div>
+          <div class="title">TF/SD 管理</div>
+        </div>
+
+        <div class="status">
+          <span class="badge" id="sdConnBadge">未连接</span>
+          <button class="btn btn-secondary" id="btnBack">返回</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="card">
+          <h2>连接</h2>
+          <div class="form-grid">
+            <label>
+              <div class="label">Server Base URL</div>
+              <input id="baseUrl" class="input" placeholder="http://127.0.0.1:5000" />
+            </label>
+            <label>
+              <div class="label">API Key</div>
+              <input id="apiKey" class="input" placeholder="Bearer token（不含 Bearer 前缀）" />
+            </label>
+            <label>
+              <div class="label">Device ID</div>
+              <input id="deviceId" class="input" placeholder="例如 esp32-001" />
+            </label>
+          </div>
+          <div class="row">
+            <button class="btn" id="btnSave">保存</button>
+            <button class="btn" id="btnTest">测试连接</button>
+            <span class="muted" id="connHint"></span>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>TF/SD 命令</h2>
+          <div class="row wrap">
+            <button class="btn" id="btnInfo">sd_info</button>
+            <button class="btn" id="btnList">sd_list</button>
+            <button class="btn" id="btnClearQueue">sd_clear_queue</button>
+          </div>
+
+          <div class="form-grid">
+            <label>
+              <div class="label">路径（list/delete/read）</div>
+              <input id="path" class="input" placeholder="/sd/ 或 /sd/logs/" />
+            </label>
+            <label>
+              <div class="label">读取行数（read_text 可选）</div>
+              <input id="maxLines" class="input" type="number" min="1" max="2000" placeholder="例如 200" />
+            </label>
+          </div>
+
+          <div class="row wrap">
+            <button class="btn" id="btnRead">sd_read_text</button>
+            <button class="btn" id="btnDelete">sd_delete</button>
+          </div>
+
+          <div class="row">
+            <span class="muted" id="cmdHint"></span>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2>结果</h2>
+          <div class="row">
+            <span class="muted">最近 cmd_id：</span>
+            <span class="mono" id="lastCmdId">-</span>
+            <button class="btn btn-secondary" id="btnCopyCmdId">复制</button>
+          </div>
+          <textarea id="output" class="textarea" rows="18" spellcheck="false" placeholder="这里显示 cmd_ack 内容"></textarea>
+        </section>
+      </main>
+    </div>
+
+    <script src="sd.js"></script>
+  </body>
+</html>

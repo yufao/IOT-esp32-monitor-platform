@@ -63,11 +63,17 @@ try:
 except ImportError:
 	SDCardManager=None
 
+try:
+	from hw_sd_queue import SdTelemetryQueue
+except ImportError:
+	SdTelemetryQueue = None
+
 # ---- 信道切换（KEY1）----
 # 按下切换 WIFI <-> BLE
 KEY1 = machine.Pin(KEY1_PIN, machine.Pin.IN, machine.Pin.PULL_UP)  # 输入上拉
 # ---- 缓存开关（KEY2）----
-# 按下切换“失败重试缓存”开关（仅内存队列；默认关闭）
+# 按下切换“失败重试缓存”开关（默认关闭）。
+# 开启后：失败上报会入队（优先 TF 队列，失败再退回内存），并按 2s/10 条节奏补发。
 KEY2 = machine.Pin(KEY2_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
 KEY_DEBOUNCE_MS = 200  # 按键防抖时间
 
@@ -79,6 +85,11 @@ MEM_LOG_INTERVAL_MS = 10000  # 内存日志间隔
 GC_INTERVAL_MS = 30000  # 垃圾回收周期（防碎片）
 CONNECT_RETRY_MS = 5000  # WiFi 非阻塞重连间隔
 ENQUEUE_COOLDOWN_MS = 3000  # 断网入队冷却时间
+
+# TF 持久化队列：补发节奏
+SD_FLUSH_INTERVAL_MS = 2000  # 每 2s 尝试补发
+SD_FLUSH_MAX_ITEMS = 10  # 每次最多补发 10 条
+SD_QUEUE_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2GB
 
 def toggle_channel(current):
 	"""在 WIFI 与 BLE 之间切换。"""
@@ -116,6 +127,7 @@ def main():
 
 	# SD卡挂载
 	sd=None
+	sd_queue = None
 	if SDCardManager:
 		# 启动延迟，降低瞬时电流导致的 brownout 风险
 		time.sleep_ms(1200)
@@ -124,6 +136,12 @@ def main():
 		print("sd mount:", "ok" if ok else "fail", info)
 		if ok:
 			sd.log_line("runtime.log","boot ok")
+			# 初始化 TF 持久化队列（仅当模块存在）
+			if SdTelemetryQueue:
+				try:
+					sd_queue = SdTelemetryQueue(mount_point=sd.mount_point, max_total_bytes=SD_QUEUE_MAX_BYTES)
+				except Exception as _e:
+					sd_queue = None
 
 	# 读取运行时配置（WiFi/阈值）
 	runtime_cfg = load_config() if load_config else {"wifi": {}, "threshold": {}}
@@ -173,6 +191,7 @@ def main():
 	last_connect_try = time.ticks_ms()  # 上次连接尝试时间
 	last_gc = time.ticks_ms()  # 上次 GC 时间
 	last_enqueue_fail = time.ticks_ms()  # 上次入队失败时间
+	last_sd_flush = time.ticks_ms()  # 上次 TF 队列补发时间
 	last_ble_report = time.ticks_ms()  # BLE 状态输出时间
 	last_sd_log = time.ticks_ms()	#上次挂载的时间
 
@@ -198,15 +217,33 @@ def main():
 						set_wifi_enabled(True)
 						uploader = WifiUploader(ssid=ssid, password=password, url=SERVER_URL)
 						uploader.connect_step(now)  # 非阻塞连接
+						# 切回 WIFI 时重新初始化 WS 客户端（如果配置可用）
+						ws_client = None
+						if WsTelemetryClient:
+							try:
+								from hw_config import SERVER_WS_URL, API_KEY, FIRMWARE_VERSION
+							except Exception:
+								SERVER_WS_URL, API_KEY, FIRMWARE_VERSION = None, None, None
+							if SERVER_WS_URL and str(SERVER_WS_URL).startswith("ws") and API_KEY:
+								hello = {
+									"type": "hello",
+									"device_id": DEVICE_ID,
+									"api_key": API_KEY,
+									"firmware_version": FIRMWARE_VERSION or "0.0.0",
+									"protocol": 1,
+									"capabilities": {"bmp280": True, "light": True},
+								}
+								ws_client = WsTelemetryClient(url=SERVER_WS_URL, hello_payload=hello)
 						ble = None
 					else:
 						set_wifi_enabled(False)
 						uploader = None
+						ws_client = None
 						ble = BleUartServer() if BleUartServer else None
 						if ble:
 							print("ble ready:", ble.is_ready())  # 打印 BLE 可用状态
 
-		# KEY2：切换失败重试缓存开关（不写 Flash/TF，仅控制内存 retry_queue 入队）
+		# KEY2：切换失败重试缓存开关（失败上报入队/补发）
 		key2_state = KEY2.value()
 		if key2_state != last_key2_state:
 			if time.ticks_diff(now, last_key2_change) > KEY_DEBOUNCE_MS:
@@ -235,6 +272,23 @@ def main():
 					uploader = WifiUploader(ssid=ssid, password=password, url=SERVER_URL)
 					uploader.connect_step(now)
 					ble = None
+					# 也初始化 WS（如果配置可用）
+					ws_client = None
+					if WsTelemetryClient:
+						try:
+							from hw_config import SERVER_WS_URL, API_KEY, FIRMWARE_VERSION
+						except Exception:
+							SERVER_WS_URL, API_KEY, FIRMWARE_VERSION = None, None, None
+						if SERVER_WS_URL and str(SERVER_WS_URL).startswith("ws") and API_KEY:
+							hello = {
+								"type": "hello",
+								"device_id": DEVICE_ID,
+								"api_key": API_KEY,
+								"firmware_version": FIRMWARE_VERSION or "0.0.0",
+								"protocol": 1,
+								"capabilities": {"bmp280": True, "light": True},
+							}
+							ws_client = WsTelemetryClient(url=SERVER_WS_URL, hello_payload=hello)
 				elif cmd_type == "threshold":
 					try:
 						high = float(cmd.get("temp_high"))
@@ -275,7 +329,7 @@ def main():
 
 				# 优先使用 WebSocket 直连
 				if ws_client and ws_client.is_connected():
-					msg = {
+					ws_msg = {
 						"type": "telemetry",
 						"device_id": DEVICE_ID,
 						"seq": seq,
@@ -283,9 +337,9 @@ def main():
 						"environment": payload.get("environment"),
 						"is_buffered": False,
 					}
-					ok = ws_client.send_json(msg)
+					ok = ws_client.send_json(ws_msg)
 					info = "ws" if ok else "ws-fail"
-					# WS 发送失败时：立刻尝试 HTTP 备用，避免 cache_enabled=False 时直接丢数据
+					# WS 发送失败时：立刻尝试 HTTP 备用
 					if not ok:
 						ok, info = uploader.post_json(http_payload)
 						info = "http-after-ws" if ok else info
@@ -299,14 +353,21 @@ def main():
 					else:
 						ok, info = uploader.post_json(http_payload)
 
-				# 断网/失败时入队节流，避免内存膨胀（仅当 cache_enabled=True）
+				# 断网/失败时入队节流（仅当 cache_enabled=True）
 				if not ok and cache_enabled:
 					if info != "wifi-disconnected" or time.ticks_diff(now, last_enqueue_fail) >= ENQUEUE_COOLDOWN_MS:
 						http_payload["is_buffered"] = True
-						enqueue(retry_queue, http_payload)
+						# 优先落盘到 TF 队列；如不可用则退回内存队列
+						if sd_queue:
+							_sd_ok, _sd_msg = sd_queue.enqueue(http_payload)
+							info = "sd-queue" if _sd_ok else ("sd-queue-fail:" + str(_sd_msg))
+							if not _sd_ok:
+								enqueue(retry_queue, http_payload)
+						else:
+							enqueue(retry_queue, http_payload)
 						last_enqueue_fail = now
 
-				# 尽力读取服务器消息：ACK / command（不强依赖，避免接收缓冲堆积）
+				# 尽力读取服务器消息：command（不强依赖）
 				if ws_client and ws_client.is_connected():
 					raw = ws_client.recv_once()
 					if raw:
@@ -317,7 +378,6 @@ def main():
 						except Exception:
 							msg = None
 
-						# 仅处理 command（其他如 ack 忽略即可）
 						if isinstance(msg, dict) and msg.get("type") == "command":
 							cmd_id = msg.get("cmd_id")
 							cmd = msg.get("command")
@@ -346,6 +406,97 @@ def main():
 									send_interval_ms = max(500, int(interval_sec * 1000))
 									result = {"sample_interval_sec": interval_sec}
 									ok_cmd = True
+								elif t == "sd_info":
+									if not sd:
+										raise ValueError("sd_not_available")
+									mp = getattr(sd, "mount_point", "/sd")
+									res = {"mount_point": mp}
+									try:
+										st = os.statvfs(mp)
+										bsize = st[0]
+										blocks = st[2]
+										bfree = st[3]
+										res.update({
+											"block_size": bsize,
+											"total_bytes": int(blocks * bsize),
+											"free_bytes": int(bfree * bsize),
+										})
+									except Exception:
+										pass
+									result = res
+									ok_cmd = True
+								elif t == "sd_list":
+									if not sd:
+										raise ValueError("sd_not_available")
+									mp = getattr(sd, "mount_point", "/sd")
+									path = cmd.get("path") if isinstance(cmd.get("path"), str) else mp
+									path = (path or mp).strip()
+									if not path.startswith(mp):
+										raise ValueError("path_outside_mount")
+									items = []
+									if hasattr(os, "ilistdir"):
+										for it in os.ilistdir(path):
+											name = it[0]
+											type_ = it[1]
+											sz = it[3] if len(it) > 3 else None
+											items.append({"name": name, "is_dir": bool(type_ & 0x4000), "size": sz})
+									else:
+										for name in os.listdir(path):
+											full = path.rstrip("/") + "/" + name
+											try:
+												st = os.stat(full)
+												is_dir = bool(st[0] & 0x4000)
+												size = st[6] if not is_dir else None
+											except Exception:
+												is_dir, size = False, None
+											items.append({"name": name, "is_dir": is_dir, "size": size})
+									result = {"path": path, "items": items}
+									ok_cmd = True
+								elif t == "sd_read_text":
+									if not sd:
+										raise ValueError("sd_not_available")
+									mp = getattr(sd, "mount_point", "/sd")
+									path = cmd.get("path")
+									if not isinstance(path, str) or not path:
+										raise ValueError("path_required")
+									if not path.startswith(mp):
+										raise ValueError("path_outside_mount")
+									try:
+										max_bytes = int(cmd.get("max_bytes") or 4096)
+									except Exception:
+										max_bytes = 4096
+									if max_bytes < 1:
+										max_bytes = 1
+									if max_bytes > 16384:
+										max_bytes = 16384
+									with open(path, "r") as f:
+										text = f.read(max_bytes)
+									result = {"path": path, "text": text, "truncated": True if len(text) >= max_bytes else False}
+									ok_cmd = True
+								elif t == "sd_delete":
+									if not sd:
+										raise ValueError("sd_not_available")
+									mp = getattr(sd, "mount_point", "/sd")
+									path = cmd.get("path")
+									if not isinstance(path, str) or not path:
+										raise ValueError("path_required")
+									if not path.startswith(mp):
+										raise ValueError("path_outside_mount")
+									os.remove(path)
+									result = {"path": path, "deleted": True}
+									ok_cmd = True
+								elif t == "sd_clear_queue":
+									if not sd:
+										raise ValueError("sd_not_available")
+									if not SdTelemetryQueue:
+										raise ValueError("sd_queue_module_missing")
+									q = sd_queue
+									if not q:
+										q = SdTelemetryQueue(mount_point=getattr(sd, "mount_point", "/sd"), max_total_bytes=SD_QUEUE_MAX_BYTES)
+									q.clear()
+									sd_queue = q
+									result = {"cleared": True}
+									ok_cmd = True
 								else:
 									raise ValueError("unknown_command_type")
 							except Exception as exc:
@@ -366,38 +517,72 @@ def main():
 								ws_client.send_json(ack)
 							except Exception:
 								pass
-				print("send:", "ok" if ok else "fail", info)  # 上报状态
+				print("send:", "ok" if ok else "fail", info)
 			else:
 				# BLE 模式：仅在连接后发送数据
 				if ble and ble.is_ready() and ble.is_connected():
 					ble.send_json(payload)
 				else:
-					# 未连接时每隔一段时间输出提示
 					if time.ticks_diff(now, last_ble_report) >= 3000:
 						print("ble: not connected")
 						last_ble_report = now
 
-			last_send = now  # 更新上报时间
+			last_send = now
 
-		if sd and time.ticks_diff(now,last_sd_log) >= 60000:
+		# TF 队列补发：独立于采样周期，每 2s 最多 10 条。
+		# 仅当 cache_enabled=True 时执行。
+		if channel == "WIFI" and uploader and sd_queue and cache_enabled:
+			if time.ticks_diff(now, last_sd_flush) >= SD_FLUSH_INTERVAL_MS:
+				last_sd_flush = now
+
+				def try_send_one(rec):
+					"""优先 WS，失败再 HTTP。返回 bool。"""
+					try:
+						if ws_client and ws_client.is_connected():
+							_ok_ws = ws_client.send_json({
+								"type": "telemetry",
+								"device_id": DEVICE_ID,
+								"seq": rec.get("seq"),
+								"timestamp": rec.get("timestamp"),
+								"environment": rec.get("environment") or {},
+								"is_buffered": bool(rec.get("is_buffered", False)),
+							})
+							if _ok_ws:
+								return True
+					except Exception:
+						pass
+					try:
+						_ok_http, _ = uploader.post_json(rec)
+						return bool(_ok_http)
+					except Exception:
+						return False
+
+				try:
+					sent, _ = sd_queue.flush(try_send_one, max_items=SD_FLUSH_MAX_ITEMS)
+					if sent:
+						print("sd flush sent:", sent)
+				except Exception:
+					pass
+
+		if sd and time.ticks_diff(now, last_sd_log) >= 60000:
 			sd.log_line("runtime.log", "alive")
 			last_sd_log = now
-			
+
 		# 内存监控
 		if time.ticks_diff(now, last_mem) >= MEM_LOG_INTERVAL_MS:
-			print("mem_free:", gc.mem_free())  # 打印可用内存
-			last_mem = now  # 更新日志时间
+			print("mem_free:", gc.mem_free())
+			last_mem = now
 
-		# 定时 GC，减少碎片
+		# 定时 GC
 		if time.ticks_diff(now, last_gc) >= GC_INTERVAL_MS:
 			gc.collect()
 			last_gc = now
 
 		# 喂狗
 		if hasattr(sensor, "feed_watchdog"):
-			sensor.feed_watchdog()  # 喂狗
+			sensor.feed_watchdog()
 
-		time.sleep_ms(10)  # 让出 CPU
+		time.sleep_ms(10)
 
 
 if __name__ == "__main__":

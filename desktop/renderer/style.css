@@ -39,6 +39,18 @@ body {
   padding: 28px;
 }
 
+.layout {
+  position: relative;
+  max-width: 1150px;
+  margin: 0 auto;
+  padding: 28px;
+}
+
+.content {
+  display: grid;
+  gap: 16px;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -73,6 +85,39 @@ body {
 .status {
   display: flex;
   gap: 10px;
+  align-items: center;
+}
+
+.badge {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px solid #263445;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+}
+
+.btn-secondary {
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid #263445;
+  background: #0c121a;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.btn-secondary:hover {
+  transform: translateY(-1px);
 }
 
 .pill {
@@ -154,6 +199,29 @@ body {
   margin-top: 10px;
 }
 
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+@media (max-width: 900px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 input {
   flex: 1;
   padding: 10px 12px;
@@ -176,6 +244,38 @@ button {
 
 button:hover {
   transform: translateY(-1px);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid #1f2a38;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text);
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 160px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #263445;
+  background: #0c121a;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .list {

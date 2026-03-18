@@ -7,6 +7,7 @@ const pressureEl = document.getElementById("pressure");
 const lightEl = document.getElementById("light");
 const rawEl = document.getElementById("raw");
 const scanList = document.getElementById("scanList");
+const btnOpenSd = document.getElementById("btnOpenSd");
 
 const ws = new WebSocket("ws://127.0.0.1:8765");
 
@@ -71,4 +72,17 @@ document.getElementById("btnThresh").addEventListener("click", () => {
   const tempHigh = document.getElementById("tempHigh").value;
   const tempLow = document.getElementById("tempLow").value;
   sendCmd({ type: "threshold", temp_high: tempHigh, temp_low: tempLow });
+});
+
+btnOpenSd?.addEventListener("click", async () => {
+  try {
+    if (window.slsApi?.openSdManager) {
+      await window.slsApi.openSdManager();
+      return;
+    }
+    // fallback: 尝试直接打开新窗口（在部分 Electron 配置下可能被拦截）
+    window.open("sd.html", "_blank");
+  } catch (_) {
+    // ignore
+  }
 });

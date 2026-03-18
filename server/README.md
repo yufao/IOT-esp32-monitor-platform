@@ -54,6 +54,12 @@
 
 设备回执：设备通过 `/ws/telemetry` 回传 `type=cmd_ack`，server 会广播 `command_ack` 到 dashboard。
 
+命令状态查询（给 Desktop/脚本轮询回执用）：
+
+- `GET http://<host>:5000/api/commands/status?cmd_id=<cmd_id>`
+	- Header：`Authorization: Bearer <api_key>`
+	- 返回：`status = pending|acked|unknown`，acked 时会带上 `ok/result/error/command`
+
 ## Telemetry 历史（SQLite）
 
 Phase1 起将 telemetry 持久化到 SQLite，便于回放/曲线与排障：
@@ -66,6 +72,9 @@ Phase1 起将 telemetry 持久化到 SQLite，便于回放/曲线与排障：
 - 默认：`server/data/sls.db`
 - 可通过环境变量覆盖：`SLS_DB_PATH`
 
+可选禁用：若暂时不希望落库/DB 未部署，可设置 `SLS_ENABLE_SQLITE=0`。
+此时 `/api/telemetry/history` 会返回 503（`sqlite_disabled`），但实时链路（WS/dashboard/HTTP telemetry）仍可用。
+
 ## 环境变量
 
 - `SLS_HOST`：监听地址（默认 `0.0.0.0`）
@@ -74,3 +83,5 @@ Phase1 起将 telemetry 持久化到 SQLite，便于回放/曲线与排障：
 - `SLS_API_KEYS`：逗号分隔的 api_key 列表（默认 `dev_key`）
 - `SLS_CORS_ORIGINS`：REST 的 CORS 白名单（默认 `*`）
 - `SLS_DEVICE_OFFLINE_TTL_SEC`：离线判定阈值（秒，默认 `60`；主要用于 HTTP 兜底设备）
+- `SLS_ENABLE_SQLITE`：是否启用 SQLite（`1`/`0`，默认 `1`）
+- `SLS_COMMAND_STATUS_TTL_SEC`：命令状态在内存中保留的 TTL（秒，默认 `600`）

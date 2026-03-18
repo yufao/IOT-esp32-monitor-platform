@@ -38,6 +38,7 @@ _latest_telemetry: Dict[str, Dict[str, Any]] = {}
 _dashboard_clients: Set[Any] = set()  # flask-sock WebSocket objects
 _device_ws: Dict[str, Any] = {}  # device_id -> /ws/telemetry WebSocket
 _pending_cmd: Dict[str, Dict[str, Any]] = {}  # cmd_id -> {device_id, command, ts}
+_cmd_results: Dict[str, Dict[str, Any]] = {}  # cmd_id -> {device_id, ok, result, error, command, ts}
 _cmd_counter = 0
 
 
@@ -76,6 +77,42 @@ def _auth_ok(api_key: Optional[str]) -> bool:
 	if not api_key:
 		return False
 	return api_key in config.API_KEYS
+
+
+def _db_enabled() -> bool:
+	"""是否启用 SQLite（允许在未部署 DB 时保持链路不报错中断）。"""
+	try:
+		return bool(getattr(config, "ENABLE_SQLITE", True))
+	except Exception:
+		return True
+
+
+def _cmd_status_ttl_sec() -> int:
+	try:
+		v = int(getattr(config, "COMMAND_STATUS_TTL_SEC", 600))
+		return 600 if v <= 0 else v
+	except Exception:
+		return 600
+
+
+def _cleanup_cmd_maps(now_ts: Optional[int] = None) -> None:
+	"""清理过期 cmd 状态，避免内存增长。"""
+	if now_ts is None:
+		now_ts = _now_ts()
+	ttl = _cmd_status_ttl_sec()
+	with _lock:
+		for cmd_id, rec in list(_pending_cmd.items()):
+			try:
+				if (now_ts - int(rec.get("ts") or 0)) > ttl:
+					_pending_cmd.pop(cmd_id, None)
+			except Exception:
+				pass
+		for cmd_id, rec in list(_cmd_results.items()):
+			try:
+				if (now_ts - int(rec.get("ts") or 0)) > ttl:
+					_cmd_results.pop(cmd_id, None)
+			except Exception:
+				pass
 
 
 def _broadcast_dashboard(message: dict[str, Any]) -> None:
@@ -155,6 +192,8 @@ def telemetry_history():
 	device_id = (request.args.get("device_id") or "").strip()
 	if not device_id:
 		return jsonify({"ok": False, "error": "device_id_required"}), 400
+	if not _db_enabled():
+		return jsonify({"ok": False, "error": "sqlite_disabled"}), 503
 
 	def _to_int(name: str) -> Optional[int]:
 		v = (request.args.get(name) or "").strip()
@@ -215,10 +254,11 @@ def telemetry_ingest_http():
 		_devices[device_id] = state
 
 	_broadcast_dashboard(record)
-	try:
-		db.insert_telemetry(record)
-	except Exception:
-		pass
+	if _db_enabled():
+		try:
+			db.insert_telemetry(record)
+		except Exception:
+			pass
 	return jsonify({"ok": True, "server_ts": _now_ts()})
 
 
@@ -291,7 +331,7 @@ def send_command():
 		return jsonify({"ok": False, "error": "send_failed"}), 500
 
 	with _lock:
-		_pending_cmd[cmd_id] = {"device_id": device_id, "command": command, "ts": _now_ts()}
+		_pending_cmd[cmd_id] = {"cmd_id": cmd_id, "device_id": device_id, "command": command, "ts": _now_ts()}
 
 	_broadcast_command_status(
 		{
@@ -302,6 +342,34 @@ def send_command():
 		}
 	)
 	return jsonify({"ok": True, "cmd_id": cmd_id})
+
+
+@app.get("/api/commands/status")
+def get_command_status():
+	"""查询命令状态（给 Desktop 轮询用）。
+
+	Header：Authorization: Bearer <api_key>
+	Query：cmd_id
+	"""
+	auth = request.headers.get("Authorization", "")
+	token = auth[7:].strip() if auth.startswith("Bearer ") else ""
+	if not _auth_ok(token):
+		return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+	cmd_id = (request.args.get("cmd_id") or "").strip()
+	if not cmd_id:
+		return jsonify({"ok": False, "error": "cmd_id_required"}), 400
+
+	_cleanup_cmd_maps()
+
+	with _lock:
+		if cmd_id in _cmd_results:
+			rec = dict(_cmd_results[cmd_id])
+			return jsonify({"ok": True, "status": "acked", **rec})
+		if cmd_id in _pending_cmd:
+			rec = dict(_pending_cmd[cmd_id])
+			return jsonify({"ok": True, "status": "pending", **rec})
+	return jsonify({"ok": True, "status": "unknown", "cmd_id": cmd_id})
 
 
 @sock.route("/ws/dashboard")
@@ -391,6 +459,18 @@ def ws_telemetry(ws):
 				pending = None
 				with _lock:
 					pending = _pending_cmd.get(cmd_id)
+					# 记录结果，供轮询查询
+					_cmd_results[cmd_id] = {
+						"cmd_id": cmd_id,
+						"device_id": device_id,
+						"ok": ok,
+						"result": result,
+						"error": err,
+						"command": pending.get("command") if isinstance(pending, dict) else None,
+						"ts": _now_ts(),
+					}
+					# pending 消费掉，避免增长
+					_pending_cmd.pop(cmd_id, None)
 					# 根据下发命令更新“最后已知配置”（MVP：仅记录阈值/采样间隔）
 					if pending and ok:
 						cmd = pending.get("command") or {}
@@ -451,10 +531,11 @@ def ws_telemetry(ws):
 
 				_broadcast_dashboard(record)
 
-				try:
-					db.insert_telemetry(record)
-				except Exception:
-					pass
+				if _db_enabled():
+					try:
+						db.insert_telemetry(record)
+					except Exception:
+						pass
 
 				# ACK：只要带 seq 就回
 				if seq is not None:
@@ -471,18 +552,20 @@ def ws_telemetry(ws):
 
 
 def create_app() -> Flask:
-	try:
-		db.init_db()
-	except Exception:
-		pass
+	if _db_enabled():
+		try:
+			db.init_db()
+		except Exception:
+			pass
 	return app
 
 
 def main() -> None:
-	try:
-		db.init_db()
-	except Exception:
-		pass
+	if _db_enabled():
+		try:
+			db.init_db()
+		except Exception:
+			pass
 	CORS(app, resources={r"/*": {"origins": config.CORS_ORIGINS}})
 	app.run(host=config.HOST, port=config.PORT, debug=config.DEBUG)
 

@@ -38,4 +38,6 @@
 ## 页面
 
 - `/`：首页（监控 + 历史回放 + 配置参数框）
-- `/device/:id`：设备详情页（信息/参数/配置下发）
+- `/device/:id`：设备详情页（信息/参数/配置下发 + TF/SD 卡管理）
+
+说明：TF/SD 卡管理依赖设备固件支持 `sd_info/sd_list/sd_read_text/sd_delete/sd_clear_queue` 命令，并通过 server 的命令通道返回 `command_ack`。

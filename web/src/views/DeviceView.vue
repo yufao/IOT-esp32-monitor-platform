@@ -126,6 +126,82 @@
         <template #header>
           <div class="cardHeader">
             <div>
+              <div class="title">TF/SD 卡管理</div>
+              <div class="sub">sd_info / sd_list / sd_read_text / sd_delete / sd_clear_queue</div>
+            </div>
+          </div>
+        </template>
+
+        <el-empty v-if="!device" description="请选择有效设备" />
+
+        <div v-else>
+          <el-form label-width="90px">
+            <el-form-item label="路径">
+              <el-input v-model="sdPath" placeholder="/sd" />
+            </el-form-item>
+
+            <el-form-item>
+              <el-button :loading="sdBusy" :disabled="!canSend" @click="sdInfoCmd">查询容量</el-button>
+              <el-button :loading="sdBusy" :disabled="!canSend" type="primary" @click="sdListCmd">列出目录</el-button>
+              <el-button :loading="sdBusy" :disabled="!canSend" plain @click="sdListQueueCmd">列出队列目录</el-button>
+              <el-button :loading="sdBusy" :disabled="!canSend" type="danger" plain @click="sdClearQueueCmd">清空队列</el-button>
+            </el-form-item>
+          </el-form>
+
+          <div v-if="sdInfo" class="sdInfo">
+            <div><b>挂载点：</b>{{ sdInfo.mount_point || '--' }}</div>
+            <div><b>剩余：</b>{{ formatBytes(sdInfo.free_bytes) }} / <b>总计：</b>{{ formatBytes(sdInfo.total_bytes) }}</div>
+          </div>
+
+          <el-alert v-if="sdError" :title="sdError" type="error" show-icon :closable="false" style="margin: 8px 0;" />
+
+          <el-table v-if="sdItems.length" :data="sdItems" size="small" style="width: 100%; margin-top: 8px;">
+            <el-table-column prop="name" label="名称" min-width="160" />
+            <el-table-column label="类型" width="80">
+              <template #default="scope">
+                <el-tag size="small" effect="light" :type="scope.row.is_dir ? 'info' : 'success'">
+                  {{ scope.row.is_dir ? 'DIR' : 'FILE' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="大小" width="110">
+              <template #default="scope">
+                <span>{{ scope.row.is_dir ? '--' : formatBytes(scope.row.size) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="160">
+              <template #default="scope">
+                <el-button
+                  size="small"
+                  :disabled="sdBusy || !canSend || scope.row.is_dir"
+                  @click="sdReadCmd(scope.row)"
+                >
+                  读取
+                </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :disabled="sdBusy || !canSend || scope.row.is_dir"
+                  @click="sdDeleteCmd(scope.row)"
+                >
+                  删除
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div v-if="sdText" style="margin-top: 10px;">
+            <div class="sectionTitle" style="margin-bottom: 6px;">文件内容（前 {{ sdMaxBytes }} 字节）</div>
+            <el-input v-model="sdText" type="textarea" :rows="8" readonly />
+          </div>
+        </div>
+      </el-card>
+
+      <el-card class="card" shadow="never" style="margin-top: 12px;">
+        <template #header>
+          <div class="cardHeader">
+            <div>
               <div class="title">最近消息</div>
               <div class="sub">沿用 dashboard WS</div>
             </div>
@@ -218,6 +294,121 @@ const lastAckText = computed(() => {
 });
 
 const canSend = computed(() => props.id && device.value?.status === 'online');
+
+// --- TF/SD 管理（复用命令通道） ---
+const sdPath = ref('/sd');
+const sdListedPath = ref('/sd');
+const sdItems = ref([]);
+const sdInfo = ref(null);
+const sdText = ref('');
+const sdMaxBytes = 4096;
+const sdBusy = ref(false);
+const sdPendingCmdId = ref(null);
+const sdError = ref('');
+
+function formatBytes(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v < 0) return '--';
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
+  if (v < 1024 * 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(v / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+async function runSdCommand(command) {
+  if (!canSend.value) return;
+  sdBusy.value = true;
+  sdError.value = '';
+  try {
+    const r = await sendCommand({ deviceId: props.id, command });
+    sdPendingCmdId.value = r.cmd_id;
+    ElMessage.success(`命令已下发：${r.cmd_id}`);
+  } catch (e) {
+    sdError.value = String(e);
+    ElMessage.error(String(e));
+    sdBusy.value = false;
+    sdPendingCmdId.value = null;
+  }
+}
+
+function sdInfoCmd() {
+  runSdCommand({ type: 'sd_info' });
+}
+
+function sdListCmd() {
+  sdText.value = '';
+  runSdCommand({ type: 'sd_list', path: sdPath.value || '/sd' });
+}
+
+function sdListQueueCmd() {
+  sdText.value = '';
+  sdPath.value = '/sd/sls_queue';
+  runSdCommand({ type: 'sd_list', path: sdPath.value });
+}
+
+function sdClearQueueCmd() {
+  runSdCommand({ type: 'sd_clear_queue' });
+}
+
+function joinPath(dir, name) {
+  const d = String(dir || '/sd').replace(/\/+$/, '');
+  const n = String(name || '').replace(/^\/+/, '');
+  return `${d}/${n}`;
+}
+
+function sdReadCmd(row) {
+  const path = joinPath(sdListedPath.value, row?.name);
+  runSdCommand({ type: 'sd_read_text', path, max_bytes: sdMaxBytes });
+}
+
+function sdDeleteCmd(row) {
+  const path = joinPath(sdListedPath.value, row?.name);
+  runSdCommand({ type: 'sd_delete', path });
+}
+
+watch(
+  () => lastAck.value,
+  (ack) => {
+    if (!ack) return;
+    if (!sdPendingCmdId.value) return;
+    if (ack.cmd_id !== sdPendingCmdId.value) return;
+
+    sdBusy.value = false;
+    sdPendingCmdId.value = null;
+
+    if (!ack.ok) {
+      sdError.value = String(ack.error || 'error');
+      return;
+    }
+
+    const t = ack.command?.type;
+    if (t === 'sd_info') {
+      sdInfo.value = ack.result || null;
+      return;
+    }
+    if (t === 'sd_list') {
+      sdListedPath.value = ack.result?.path || sdPath.value || '/sd';
+      sdItems.value = Array.isArray(ack.result?.items) ? ack.result.items : [];
+      return;
+    }
+    if (t === 'sd_read_text') {
+      sdText.value = String(ack.result?.text || '');
+      return;
+    }
+    if (t === 'sd_delete') {
+      // 简单处理：删除后刷新列表（如果之前列过目录）
+      if (sdListedPath.value) {
+        runSdCommand({ type: 'sd_list', path: sdListedPath.value });
+      }
+      return;
+    }
+    if (t === 'sd_clear_queue') {
+      // 清空后刷新队列目录
+      sdPath.value = '/sd/sls_queue';
+      runSdCommand({ type: 'sd_list', path: sdPath.value });
+    }
+  },
+);
 
 function goHome() {
   router.push({ name: 'home' });

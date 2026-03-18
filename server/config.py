@@ -31,3 +31,10 @@ API_KEYS = {k.strip() for k in _env("SLS_API_KEYS", "dev_key").split(",") if k.s
 # 设备离线判定：超过 last_seen + TTL 视为 offline（尤其用于 HTTP 兜底设备）
 # 默认 60 秒；可通过环境变量覆盖。
 DEVICE_OFFLINE_TTL_SEC = int(_env("SLS_DEVICE_OFFLINE_TTL_SEC", "60"))
+
+# 是否启用 SQLite 落库与历史查询。
+# 在 DB 未部署/不可写的阶段可关闭，保证 telemetry/WS/dashboard 链路不中断。
+ENABLE_SQLITE = _env("SLS_ENABLE_SQLITE", "1") == "1"
+
+# 命令状态（pending/acked）在内存中保留的 TTL（秒），用于 Desktop 轮询回执。
+COMMAND_STATUS_TTL_SEC = int(_env("SLS_COMMAND_STATUS_TTL_SEC", "600"))
