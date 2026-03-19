@@ -41,3 +41,5 @@ hardware/runtime_config.json
 
 # MicroPython
 *.mpy
+
+.env.local
