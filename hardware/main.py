@@ -421,6 +421,7 @@ def main():
 				"environment": {},
 			}
 
+
 		# 周期上报
 		if time.ticks_diff(now, last_send) >= send_interval_ms:
 			if channel == "WIFI" and uploader:
