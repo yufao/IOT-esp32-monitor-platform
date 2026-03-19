@@ -2,6 +2,8 @@
 
 目标：提供 BLE 直连、实时仪表盘、WiFi 配网、阈值配置、本地日志。
 
+当前状态：已与 Server/Web/Hardware 完成“四方联调”。桌面端既能做 BLE 本地运维，也能通过 Server 的命令通道对在线设备做 TF/SD 管理。
+
 ## 启动方式
 1. 安装依赖（Python）：
 	- 进入 python 目录，安装 `bleak` 与 `websockets`

@@ -1,10 +1,11 @@
 # Phase 1 联调与部署步骤（路线A：Flask + 原生 WebSocket）
 
-更新时间：2026-03-16
+更新时间：2026-03-20
 
 目标：
 - 先打通 ESP32 → Server 的 WebSocket 直连链路（/ws/telemetry）
 - 再打通 Web 订阅链路（/ws/dashboard）
+- 再打通 Desktop（BLE 本地运维 + 通过 Server 命令通道做 TF/SD 管理）
 - 缓存功能默认关闭（KEY2 控制是否启用失败重试缓存，当前仅内存队列，不写 Flash/TF）
 
 ---
@@ -68,6 +69,10 @@
 3) 启动开发服务器：
 - `npm run dev`
 
+如果需要让外网访问（云服务器/局域网）：
+- `npm run dev -- --host 0.0.0.0`
+- 放行端口 `5173`
+
 4) 访问：
 - `http://127.0.0.1:5173/`
 
@@ -75,6 +80,25 @@
 - 页面收到 `snapshot` 后显示设备列表（在线/离线、last_seen、最新值）
 - 当 server 广播 `telemetry/device_status` 时实时更新
 - 右侧实时曲线随选中设备更新
+
+---
+
+## 2.6 Desktop（Electron + BLE Bridge）
+
+位置：`ESP32/iot_ai_monitor/desktop/`
+
+1) 安装 Python 依赖（BLE Bridge）：
+- 进入 `desktop/python/`
+- `python -m pip install -r requirements.txt`
+
+2) 安装 Electron 依赖并启动：
+- 进入 `desktop/`
+- `npm install`
+- `npm start`
+
+说明：
+- Desktop 负责 BLE 本地直连（实时数据/配网/阈值等）
+- TF/SD 管理通过 Server 的 `/api/commands/*` 命令通道实现（设备需在线且能回 `cmd_ack`）
 
 ---
 
@@ -129,11 +153,17 @@
 ### 4.3 Nginx 反代（可选，但推荐用于 TLS）
 - 反代必须正确透传 `Upgrade` / `Connection` 头，否则 WebSocket 握手会失败
 
+### 4.4 端口放行（强烈建议写进部署检查表）
+- `5000`：Flask + WebSocket（Server）
+- `5173`：Vite dev server（仅当你用 dev server 对外提供 Web；生产建议改为静态托管 + 反代）
+
 ---
 
-## 5. Phase 1 验收清单
+## 5. Phase 1 验收清单（四方联调）
 
 - Server：`/health` OK
 - ESP32：WS hello 成功，telemetry 周期发送并收到 ack
 - Dashboard：能接收 telemetry 广播
+- Web：能看到设备列表与实时数据；浏览器能连 `/ws/dashboard`
+- Desktop：BLE 可扫描/连接并看到实时数据；TF/SD 管理可通过命令通道拿到回执（设备在线时）
 - 离线：ESP32 断网不崩溃；缓存默认关闭（KEY2 可临时开启内存重试）

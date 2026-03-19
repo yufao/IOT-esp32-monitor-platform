@@ -28,6 +28,19 @@
 4) 探活：
 - `GET http://127.0.0.1:5000/health`
 
+---
+
+## 四方联调（Server 侧要点）
+
+四方联调链路：
+- HARDWARE → SERVER：`/ws/telemetry`（主）与 `/api/telemetry`（兜底）
+- WEB → SERVER：REST（设备列表/历史等）与 `/ws/dashboard`（实时订阅）
+- DESKTOP → SERVER：通过 REST 命令通道 `/api/commands/*` 下发 SD 指令/参数，并轮询回执
+
+云服务器部署时请确保：
+- 安全组/防火墙放行 `5000`（Flask/WS 端口）
+- 若 Web 前端跑在云服务器并要被外网访问，放行 `5173`（Vite dev server）或自行用 Nginx/静态托管
+
 ## WebSocket 路由（Phase 1）
 
 - `ws://<host>:5000/ws/telemetry`
@@ -86,3 +99,17 @@ Phase1 起将 telemetry 持久化到 SQLite，便于回放/曲线与排障：
 - `SLS_DEVICE_OFFLINE_TTL_SEC`：离线判定阈值（秒，默认 `60`；主要用于 HTTP 兜底设备）
 - `SLS_ENABLE_SQLITE`：是否启用 SQLite（`1`/`0`，默认 `1`）
 - `SLS_COMMAND_STATUS_TTL_SEC`：命令状态在内存中保留的 TTL（秒，默认 `600`）
+
+---
+
+## 常见坑（排障速查）
+
+1) Web 能打开但没有设备/一直 Failed to fetch
+- Web 的 `VITE_API_BASE` 指错（还在 `127.0.0.1` 或占位符），需要改成 `http://<server>:5000` 并重启 `npm run dev`
+
+2) WebSocket 握手失败
+- 直连访问：确认浏览器能连 `ws://<server>:5000/ws/dashboard`
+- 反代场景：Nginx 必须透传 `Upgrade` / `Connection`，否则 WS 会 400/断开
+
+3) 设备端出现“卡住/重启”
+- 优先检查云服务器端口是否放行；网络调用阻塞是最常见根因
