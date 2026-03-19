@@ -25,6 +25,19 @@
 - `$env:VITE_API_BASE = "http://127.0.0.1:5000"`
 - `$env:VITE_API_KEY = "<your_api_key>"`
 
+### 重要：远程访问时不要用 127.0.0.1
+
+如果你在“另一台电脑/手机”通过公网访问云服务器的 `http://<server>:5173/`：
+
+- 前端默认 `VITE_API_BASE=http://127.0.0.1:5000` 会指向**访问者自己的电脑**，不是云服务器。
+- 表现就是页面顶部 `TypeError: Failed to fetch`、并且 `WS Disconnected`。
+
+请把 `VITE_API_BASE` 改为云服务器的后端地址，例如：`http://8.134.151.27:5000`。
+
+推荐做法：在本目录创建 `.env.local`（可参考 `.env.local.example`），然后重启 `npm run dev`。
+
+> 注意：Vite 环境变量只在启动时注入，修改 `.env.local` 或环境变量后必须重启 dev server。
+
 ## 启动
 
 在 `ESP32/iot_ai_monitor/web` 目录：

@@ -19,6 +19,7 @@
 2) 安装依赖：
 - `python -m venv .venv`
 - Windows：`.\.venv\Scripts\Activate.ps1`
+- Linux: `source .venv/bin/activate`
 - `pip install -r server/requirements.txt`
 
 3) 启动：

@@ -131,6 +131,12 @@ class SensorManager:
         self._bmp280 = None
         self._bmp280_cache = {"temp": None, "pressure": None, "status": "init"}
 
+        # 传感器读取节流：避免每一轮主循环都做 I2C 操作
+        self._bmp_read_interval_ms = int(CONFIG.get("read_interval_ms", 2000) or 2000)
+        if self._bmp_read_interval_ms < 200:
+            self._bmp_read_interval_ms = 200
+        self._next_bmp_read_ms = 0
+
         if USE_BMP280:
             self._bmp280 = self._init_bmp280()
 
@@ -155,13 +161,25 @@ class SensorManager:
             return None
         return None
         
-    def read_bmp280(self):
-        """读取 BMP280，失败则返回缓存。"""
+    def read_bmp280(self, now_ms=None):
+        """读取 BMP280（节流），失败则返回缓存。"""
         if not USE_BMP280 or self._bmp280 is None:
             self._bmp280_cache = {"temp": None, "pressure": None, "status": "unavailable"}
             return self._bmp280_cache
 
+        # 节流：未到读取时间直接返回缓存，避免 I2C 抢占/偶发卡住拖垮主循环
         try:
+            if now_ms is not None and time.ticks_diff(now_ms, self._next_bmp_read_ms) < 0:
+                return self._bmp280_cache
+        except Exception:
+            pass
+
+        try:
+            if now_ms is not None:
+                try:
+                    self._next_bmp_read_ms = time.ticks_add(now_ms, self._bmp_read_interval_ms)
+                except Exception:
+                    self._next_bmp_read_ms = 0
             temp_c, pressure_hpa = self._bmp280.read_compensated()
             self._bmp280_cache = {
                 "temp": temp_c,
@@ -211,7 +229,7 @@ class SensorManager:
             
     def collect_data(self, now_ms):
         """非阻塞式数据采集。"""
-        bmp_data = self.read_bmp280()
+        bmp_data = self.read_bmp280(now_ms)
         light_data = self.read_light_filtered(now_ms)
 
         return {

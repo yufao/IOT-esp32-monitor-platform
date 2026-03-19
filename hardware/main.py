@@ -176,7 +176,7 @@ def main():
 				"protocol": 1,
 				"capabilities": {"bmp280": True, "light": True},
 			}
-			ws_client = WsTelemetryClient(url=SERVER_WS_URL, hello_payload=hello)
+			ws_client = WsTelemetryClient(url=SERVER_WS_URL, hello_payload=hello, connect_timeout_s=2, io_timeout_s=0.3)
 	ble = BleUartServer() if channel == "BLE" and BleUartServer else None  # BLE 服务
 	if ble:
 		print("ble ready:", ble.is_ready())  # 打印 BLE 可用状态
@@ -184,11 +184,19 @@ def main():
 	retry_queue = []  # 失败数据缓存
 	last_send = time.ticks_ms()  # 上次上报时间
 	last_mem = time.ticks_ms()  # 上次内存日志时间
+	last_status_log = time.ticks_ms()  # 上次网络状态日志时间
+	last_send_log = time.ticks_ms()  # 上次 send 结果日志时间
+	last_loop_log = time.ticks_ms()  # 上次 loop 心跳日志时间
+	last_send_state = None
+	send_ok_cnt = 0
+	send_fail_cnt = 0
+	wifi_disc_cnt = 0
 	last_key_change = time.ticks_ms()  # 防抖计时
 	last_key_state = KEY1.value()  # 初始按键状态
 	last_key2_change = time.ticks_ms()
 	last_key2_state = KEY2.value()
 	last_connect_try = time.ticks_ms()  # 上次连接尝试时间
+	last_ws_connect_try = time.ticks_ms()
 	last_gc = time.ticks_ms()  # 上次 GC 时间
 	last_enqueue_fail = time.ticks_ms()  # 上次入队失败时间
 	last_sd_flush = time.ticks_ms()  # 上次 TF 队列补发时间
@@ -203,6 +211,14 @@ def main():
 
 	while True:
 		now = time.ticks_ms()  # 当前时间
+
+		# loop 心跳（节流，避免串口 print 堵塞）
+		if time.ticks_diff(now, last_loop_log) >= 10000:
+			try:
+				print("loop alive, ms:", now)
+			except Exception:
+				pass
+			last_loop_log = now
 
 		# 检测按键边沿并切换信道
 		key_state = KEY1.value()
@@ -304,15 +320,106 @@ def main():
 		# WiFi 模式下：定时尝试重连（非阻塞）
 		if channel == "WIFI" and uploader:
 			if time.ticks_diff(now, last_connect_try) >= CONNECT_RETRY_MS:
-				uploader.connect_step(now)
+				_t0 = time.ticks_ms()
+				try:
+					uploader.connect_step(now)
+				except Exception as _e:
+					try:
+						print("wifi connect_step exc:", _e)
+					except Exception:
+						pass
+				_dt = time.ticks_diff(time.ticks_ms(), _t0)
+				if _dt > 300:
+					try:
+						print("wifi connect_step slow(ms):", _dt)
+					except Exception:
+						pass
 				last_connect_try = now
 		if channel == "WIFI" and ws_client:
-			# 复用同一个重连节奏
-			if time.ticks_diff(now, last_connect_try) >= CONNECT_RETRY_MS:
-				ws_client.connect_step(now)
+			# 只有 WiFi 真正连上（拿到 IP）才尝试 WS 握手，避免在 CONNECTING 状态下卡死
+			_ws_should_try = False
+			try:
+				_ws_should_try = bool(uploader and uploader.is_connected())
+			except Exception:
+				_ws_should_try = False
+			# WS 需要独立重连节奏，否则会被 uploader 的 last_connect_try“饿死”
+			if _ws_should_try and time.ticks_diff(now, last_ws_connect_try) >= CONNECT_RETRY_MS:
+				_t0 = time.ticks_ms()
+				try:
+					ws_client.connect_step(now)
+				except Exception as _e:
+					try:
+						print("ws connect_step exc:", _e)
+					except Exception:
+						pass
+				_dt = time.ticks_diff(time.ticks_ms(), _t0)
+				if _dt > 300:
+					try:
+						print("ws connect_step slow(ms):", _dt)
+					except Exception:
+						pass
+				last_ws_connect_try = now
 
-		# 持续采集数据（传感器模块内部非阻塞）
-		payload = sensor.collect_data(now)  # 构建数据包
+		# 网络状态打印（节流）
+		if channel == "WIFI" and time.ticks_diff(now, last_status_log) >= 5000:
+			try:
+				if uploader and getattr(uploader, "wlan", None):
+					w = uploader.wlan
+					st = None
+					try:
+						st = w.status()
+					except Exception:
+						st = None
+					print("wifi:", "connected" if w.isconnected() else "down", "status:", st)
+					if w.isconnected():
+						try:
+							print("ifconfig:", w.ifconfig())
+						except Exception:
+							pass
+			except Exception:
+				pass
+			try:
+				if ws_client:
+					st = "connected" if ws_client.is_connected() else "down"
+					snap = None
+					try:
+						snap = ws_client.debug_snapshot() if hasattr(ws_client, "debug_snapshot") else None
+					except Exception:
+						snap = None
+					if snap and (not ws_client.is_connected()):
+						print("ws:", st, "lib:", snap.get("lib"), "err:", snap.get("last_error"))
+					else:
+						print("ws:", st)
+				else:
+					print("ws:", "disabled")
+			except Exception:
+				pass
+			last_status_log = now
+
+		# 持续采集数据（调试隔离：WiFi 未连上时，尽量不碰 I2C/ADC，先把 WDT 根因缩小范围）
+		wifi_connected = False
+		try:
+			if channel == "WIFI" and uploader and uploader.is_connected():
+				wifi_connected = True
+		except Exception:
+			wifi_connected = False
+
+		if wifi_connected:
+			_t0 = time.ticks_ms()
+			payload = sensor.collect_data(now)  # 构建数据包
+			_dt = time.ticks_diff(time.ticks_ms(), _t0)
+			if _dt > 200:
+				try:
+					print("collect_data slow(ms):", _dt)
+				except Exception:
+					pass
+		else:
+			# WiFi 未连上：只生成最小 payload，避免 I2C/ADC 偶发卡死
+			payload = {
+				"device_id": DEVICE_ID,
+				"timestamp": time.time(),
+				"environment": {},
+			}
 
 		# 周期上报
 		if time.ticks_diff(now, last_send) >= send_interval_ms:
@@ -517,7 +624,29 @@ def main():
 								ws_client.send_json(ack)
 							except Exception:
 								pass
-				print("send:", "ok" if ok else "fail", info)
+				# send 日志节流：避免串口堵塞反过来触发 task_wdt
+				state = ("ok" if ok else "fail", str(info))
+				if ok:
+					send_ok_cnt += 1
+				else:
+					send_fail_cnt += 1
+					if info == "wifi-disconnected":
+						wifi_disc_cnt += 1
+				if (state != last_send_state) or (time.ticks_diff(now, last_send_log) >= 5000):
+					try:
+						print(
+							"send:",
+							state[0],
+							state[1],
+							"cnt(ok/fail/wifi_disc):",
+							send_ok_cnt,
+							send_fail_cnt,
+							wifi_disc_cnt,
+						)
+					except Exception:
+						pass
+					last_send_state = state
+					last_send_log = now
 			else:
 				# BLE 模式：仅在连接后发送数据
 				if ble and ble.is_ready() and ble.is_connected():
@@ -564,8 +693,19 @@ def main():
 				except Exception:
 					pass
 
+		# 调试隔离：WiFi 还没连上时，先不写 TF 卡 runtime.log（避免文件系统偶发卡住触发 WDT）
 		if sd and time.ticks_diff(now, last_sd_log) >= 60000:
-			sd.log_line("runtime.log", "alive")
+			_should_log = True
+			try:
+				if channel == "WIFI" and uploader and (not uploader.is_connected()):
+					_should_log = False
+			except Exception:
+				_should_log = True
+			if _should_log:
+				try:
+					sd.log_line("runtime.log", "alive")
+				except Exception:
+					pass
 			last_sd_log = now
 
 		# 内存监控

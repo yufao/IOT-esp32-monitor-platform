@@ -73,6 +73,15 @@ class WifiUploader:
     def is_connected(self):
         return self.wlan and self.wlan.isconnected()
 
+    def wlan_status(self):
+        """尽力返回 WLAN status()，用于调试。"""
+        if not self.wlan:
+            return None
+        try:
+            return self.wlan.status()
+        except Exception:
+            return None
+
     def connect_step(self, now_ms):
         """非阻塞连接步骤：到时间才尝试连接。"""
         if not self.wlan:
@@ -83,6 +92,16 @@ class WifiUploader:
 
         if time.ticks_diff(now_ms, self._next_retry) < 0:
             return False
+
+        # 如果已经在连接中，避免重复调用 connect() 导致底层卡住
+        try:
+            st = self.wlan.status()
+            # 常见约定：1=STAT_CONNECTING（不同固件可能不同；这里做保守处理）
+            if st == 1:
+                self._next_retry = time.ticks_add(now_ms, self._retry_interval_ms)
+                return False
+        except Exception:
+            pass
 
         try:
             self.wlan.connect(self.ssid, self.password)
@@ -112,12 +131,27 @@ class WifiUploader:
             return False, "urequests-missing"
 
         try:
+            # urequests 在部分固件上不支持 timeout= 参数，这里用 socket 全局默认超时兜底。
+            # 注意：这是为了避免网络卡死导致 mp_task 长时间不让出 CPU，从而触发 task_wdt。
+            try:
+                socket.setdefaulttimeout(int(timeout) if timeout else self._timeout_s)
+            except Exception:
+                pass
             headers = self._auth_header
             resp = requests.post(self.url, json=payload, headers=headers) if headers else requests.post(self.url, json=payload)
             status = resp.status_code
             resp.close()
+            # 尽力恢复到默认超时
+            try:
+                socket.setdefaulttimeout(self._timeout_s)
+            except Exception:
+                pass
             return True, status
         except Exception as exc:
+            try:
+                socket.setdefaulttimeout(self._timeout_s)
+            except Exception:
+                pass
             return False, str(exc)
 
 
